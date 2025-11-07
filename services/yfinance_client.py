@@ -2,7 +2,7 @@ import asyncio
 import threading
 import time
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import yfinance as yf
 
@@ -138,3 +138,27 @@ def _has_exceeded_failures(symbol: str) -> bool:
         logger.warning("Skipping yfinance lookups for %s after %s failures", symbol, failures)
         return True
     return False
+
+
+def get_latest_price(symbol: str) -> Optional[float]:
+    """
+    Lightweight helper for synchronous price lookups used by the trading engine.
+    """
+    snapshot = _sync_fetch(symbol.upper())
+    data = snapshot.get("data") or {}
+    fast_info = data.get("fast_info") or {}
+
+    price_candidates = [
+        fast_info.get("lastPrice"),
+        fast_info.get("regularMarketPrice"),
+        fast_info.get("previousClose"),
+    ]
+    for price in price_candidates:
+        if price is not None:
+            return float(price)
+
+    history = data.get("history") or {}
+    close_value = history.get("Close") or history.get("close")
+    if close_value is not None:
+        return float(close_value)
+    return None

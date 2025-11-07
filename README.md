@@ -4,10 +4,11 @@ Microcap Scout Bot is a FastAPI-based backend that aggregates data from Finviz, 
 
 ## Features
 - FastAPI app with `uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}` (Railway/Heroku set `PORT` automatically).
-- Health and catalog endpoints (`/` and `/products.json`).
-- Service layer integrating Finviz, StockData.org, Alpaca, and `yfinance` (latest required version pinned at `0.2.52`).
-- Environment-driven configuration with `.env.example`.
-- Dockerfile + Procfile compatible with Railway.
+- `/` health and `/products.json` catalog endpoints stay stable while exposing the latest universe + trade log.
+- Hybrid scanner merges Finviz microcaps with filtered large caps (AAPL, NVDA, TSLA, etc.) and runs daily.
+- Trading engine uses Alpaca bracket orders (8% TP / 4% SL) with budget + utilization guardrails.
+- Service layer integrates Finviz, StockData.org, Alpaca, and `yfinance==0.2.52`, backed by in-memory caching and throttling.
+- Environment-driven configuration with `.env.example`, Dockerfile + Procfile for Railway.
 
 ## Project Structure
 ```
@@ -26,7 +27,9 @@ Microcap Scout Bot is a FastAPI-based backend that aggregates data from Finviz, 
 │   ├── alpaca.py
 │   ├── finviz.py
 │   ├── market_data.py
-│   └── stockdata.py
+│   ├── stockdata.py
+│   ├── trading.py
+│   └── yfinance_client.py
 ├── utils/
 │   ├── __init__.py
 │   ├── http_client.py
@@ -57,10 +60,11 @@ cp .env.example .env
 ```
 
 Required keys:
-- `FINVIZ_API_KEY`
+- `FINVIZ_TOKEN` (Finviz screener)
 - `STOCKDATA_API_KEY`
-- `ALPACA_API_KEY`
-- `ALPACA_SECRET_KEY`
+- `APCA_API_KEY_ID`, `APCA_API_SECRET_KEY`
+- `APCA_API_BASE_URL`, `APCA_API_DATA_URL` (use Railway secrets for paper/live)
+- `TRADING_BUDGET` (e.g., `1000`)
 
 Optional overrides: `ALPACA_BASE_URL`, `DEFAULT_SYMBOL`, `ENVIRONMENT`, `PORT`.
 
@@ -92,13 +96,13 @@ docker run --env-file .env -p 8000:8000 microcap-scout-bot
 4. Deploy. The health route (`/`) is ideal for Railway health checks.
 
 ## API Overview
-| Method | Route           | Description                      |
-|--------|-----------------|----------------------------------|
-| GET    | `/`             | Health/status ping               |
-| HEAD   | `/`             | Head-only health                 |
-| GET    | `/products.json`| Product catalog + sample payload |
+| Method | Route           | Description                                        |
+|--------|-----------------|----------------------------------------------------|
+| GET    | `/`             | Health/status ping                                 |
+| HEAD   | `/`             | Head-only health                                   |
+| GET    | `/products.json`| Product catalog + blended data + universe + trades |
 
 ## Next Steps
-- Add persistence/cache layers for expensive API calls.
-- Expand `services` to handle auth refresh and retries.
-- Wire the service into the existing front-end or bots.
+- Persist trade logs/universe snapshots in a backing store (Redis/Postgres) for inspection.
+- Run the hybrid strategy on a scheduled worker (Celery/Temporal) instead of app startup.
+- Wire the trading signals into your Discord/Telegram bots for real-time pushes.
