@@ -3,7 +3,7 @@
 Microcap Scout Bot is a FastAPI-based backend that aggregates data from Finviz, StockData.org, Alpaca, and `yfinance` to power microcap-focused scouting tools. This repo is a clean rebuild of the previous app, aligned with the confirmed architecture and deployment targets (Railway + Docker).
 
 ## Features
-- FastAPI app with `uvicorn main:app --host 0.0.0.0 --port $PORT`.
+- FastAPI app with `uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}` (Railway/Heroku set `PORT` automatically).
 - Health and catalog endpoints (`/` and `/products.json`).
 - Service layer integrating Finviz, StockData.org, Alpaca, and `yfinance` (latest required version pinned at `0.2.52`).
 - Environment-driven configuration with `.env.example`.
@@ -88,7 +88,7 @@ docker run --env-file .env -p 8000:8000 microcap-scout-bot
 ## Railway Deployment
 1. Create a new Railway project and attach this repo.
 2. In the Railway dashboard, set the environment variables from `.env.example`.
-3. Railway detects the `Dockerfile` or `Procfile`. Ensure the start command is `uvicorn main:app --host 0.0.0.0 --port $PORT`.
+3. Railway detects the `Dockerfile` or `Procfile`. The Procfile command (`sh -c 'uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}'`) respects Railway’s `PORT` env or defaults to 8000 locally.
 4. Deploy. The health route (`/`) is ideal for Railway health checks.
 
 ## API Overview
