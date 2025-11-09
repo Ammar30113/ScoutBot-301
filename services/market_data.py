@@ -1,6 +1,6 @@
 import asyncio
-from datetime import datetime
-from typing import Any, Dict, List
+from datetime import datetime, timedelta
+from typing import Any, Dict, List, Tuple
 
 from utils.logger import get_logger
 from utils.settings import get_settings
@@ -16,8 +16,10 @@ CORE_TICKERS = ["AAPL", "NVDA", "TSLA", "AMD", "META", "MSFT", "GOOG", "AMZN"]
 MIN_CHANGE_PERCENT = 1.0
 MIN_VOLUME = 1_000_000
 MICROCAP_LIMIT = 25
+INSIGHTS_CACHE_TTL = timedelta(seconds=90)
 
 LAST_UNIVERSE: Dict[str, Any] = {"symbols": [], "built_at": None}
+INSIGHTS_CACHE: Dict[str, Tuple[datetime, Dict[str, Any]]] = {}
 
 
 async def gather_symbol_insights(symbol: str | None = None) -> Dict[str, Any]:
@@ -26,6 +28,11 @@ async def gather_symbol_insights(symbol: str | None = None) -> Dict[str, Any]:
     """
     settings = get_settings()
     target_symbol = (symbol or settings.default_symbol).upper()
+    now = datetime.utcnow()
+
+    cached = _get_cached_insights(target_symbol, now)
+    if cached is not None:
+        return cached
     logger.info("Gathering insights for %s", target_symbol)
 
     finviz_task = fetch_finviz_snapshot(target_symbol)
@@ -40,10 +47,12 @@ async def gather_symbol_insights(symbol: str | None = None) -> Dict[str, Any]:
         yfinance_task,
     )
 
-    return {
+    result = {
         "symbol": target_symbol,
         "sources": [finviz, stockdata, alpaca, yfinance_data],
     }
+    _store_cached_insights(target_symbol, now, result)
+    return result
 
 
 async def get_daily_universe() -> List[str]:
@@ -102,3 +111,18 @@ async def _filter_large_caps(tickers: List[str]) -> List[str]:
         return tickers
 
     return qualified
+
+
+def _get_cached_insights(symbol: str, now: datetime) -> Dict[str, Any] | None:
+    cached = INSIGHTS_CACHE.get(symbol)
+    if not cached:
+        return None
+    cached_time, payload = cached
+    if now - cached_time < INSIGHTS_CACHE_TTL:
+        return payload
+    INSIGHTS_CACHE.pop(symbol, None)
+    return None
+
+
+def _store_cached_insights(symbol: str, timestamp: datetime, payload: Dict[str, Any]) -> None:
+    INSIGHTS_CACHE[symbol] = (timestamp, payload)

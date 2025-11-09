@@ -15,6 +15,7 @@ THROTTLE_WINDOW_SECONDS = 30
 THROTTLE_LIMIT = 10
 THROTTLE_SLEEP_SECONDS = 10
 MAX_FAILURES = 3
+RATE_LIMIT_BACKOFF = timedelta(seconds=90)
 
 CacheEntry = Tuple[datetime, Dict[str, Any]]
 
@@ -22,6 +23,7 @@ CACHE: Dict[str, CacheEntry] = {}
 LAST_REQUESTS: List[datetime] = []
 FAIL_COUNTS: Dict[str, int] = {}
 STATE_LOCK = threading.Lock()
+RATE_LIMIT_UNTIL: Optional[datetime] = None
 
 
 async def fetch_yfinance_snapshot(symbol: str) -> Dict[str, Any]:
@@ -36,6 +38,11 @@ async def fetch_yfinance_snapshot(symbol: str) -> Dict[str, Any]:
 def _sync_fetch(symbol: str) -> Dict[str, Any]:
     now = datetime.utcnow()
     payload: Dict[str, Any] = {"provider": "yfinance", "symbol": symbol}
+
+    wait_seconds = _current_rate_limit_delay(now)
+    if wait_seconds > 0:
+        payload["warning"] = f"yfinance_backoff_{int(wait_seconds)}s"
+        return payload
 
     cached = _get_cached(symbol, now)
     if cached is not None:
@@ -68,6 +75,8 @@ def _sync_fetch(symbol: str) -> Dict[str, Any]:
         payload["data"] = result_data
     except Exception as exc:  # pragma: no cover - defensive
         failure_count = _increment_failure(symbol)
+        if _is_rate_limit_error(exc):
+            _set_rate_limit(now)
         logger.warning(
             "yfinance fetch failed for %s (attempt %s/%s): %s",
             symbol,
@@ -138,6 +147,34 @@ def _has_exceeded_failures(symbol: str) -> bool:
         logger.warning("Skipping yfinance lookups for %s after %s failures", symbol, failures)
         return True
     return False
+
+
+def _current_rate_limit_delay(now: datetime) -> float:
+    global RATE_LIMIT_UNTIL
+    with STATE_LOCK:
+        if RATE_LIMIT_UNTIL is None:
+            return 0.0
+        if now >= RATE_LIMIT_UNTIL:
+            RATE_LIMIT_UNTIL = None
+            return 0.0
+        return (RATE_LIMIT_UNTIL - now).total_seconds()
+
+
+def _set_rate_limit(now: datetime) -> None:
+    global RATE_LIMIT_UNTIL
+    backoff_until = now + RATE_LIMIT_BACKOFF
+    with STATE_LOCK:
+        RATE_LIMIT_UNTIL = backoff_until
+    logger.warning(
+        "yfinance rate limit triggered, backing off until %s (%.0fs)",
+        backoff_until.isoformat(),
+        RATE_LIMIT_BACKOFF.total_seconds(),
+    )
+
+
+def _is_rate_limit_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return "too many requests" in message or "rate limit" in message
 
 
 def get_latest_price(symbol: str) -> Optional[float]:

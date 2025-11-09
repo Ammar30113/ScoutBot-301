@@ -160,6 +160,7 @@ def _get_alpaca_client() -> Optional[tradeapi.REST]:
         return None
 
     sanitized_base = _sanitize_alpaca_base(base_url)
+    os.environ["APCA_API_BASE_URL"] = sanitized_base
 
     try:
         client = tradeapi.REST(api_key, secret_key, sanitized_base, api_version="v2")
