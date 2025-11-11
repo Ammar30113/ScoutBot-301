@@ -1,12 +1,16 @@
 import asyncio
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from utils.logger import get_logger
 from utils.settings import get_settings
 
 from .alpaca import fetch_alpaca_latest_quote
 from .finviz import fetch_finviz_snapshot, fetch_microcap_screen
+from .finnhub_client import get_company_news as get_finnhub_company_news
+from .finnhub_client import get_quote as get_finnhub_quote
+from .finnhub_client import get_sentiment as get_finnhub_sentiment
+from .massive_client import get_quote as get_massive_quote
 from .stockdata import fetch_stockdata_quote
 from .yfinance_client import fetch_yfinance_snapshot
 
@@ -20,6 +24,47 @@ INSIGHTS_CACHE_TTL = timedelta(seconds=90)
 
 LAST_UNIVERSE: Dict[str, Any] = {"symbols": [], "built_at": None}
 INSIGHTS_CACHE: Dict[str, Tuple[datetime, Dict[str, Any]]] = {}
+
+SENTIMENT_WEIGHT = 0.6
+NEWS_WEIGHT = 0.4
+
+
+async def get_market_snapshot(symbol: str) -> Dict[str, Any]:
+    """Return a blended Massive/Finnhub snapshot for ``symbol``."""
+
+    target = symbol.upper()
+    price = await _get_price_with_fallback(target)
+
+    sentiment: Dict[str, Any] = {}
+    news: List[Dict[str, Any]] = []
+    try:
+        sentiment_task = asyncio.create_task(get_finnhub_sentiment(target))
+        news_task = asyncio.create_task(get_finnhub_company_news(target))
+        sentiment, news = await asyncio.gather(sentiment_task, news_task)
+    except Exception as exc:  # pragma: no cover - network guard
+        logger.warning("Finnhub enrichment failed for %s: %s", target, exc)
+
+    return {
+        "symbol": target,
+        "price": price,
+        "sentiment": sentiment or {},
+        "news": news,
+        "built_at": datetime.utcnow().isoformat(),
+    }
+
+
+def score_stock(snapshot: Dict[str, Any]) -> float:
+    """Score a stock based on sentiment + news breadth."""
+
+    if not snapshot:
+        return 0.0
+
+    sentiment_payload = snapshot.get("sentiment") or {}
+    sentiment_score = _extract_sentiment_score(sentiment_payload)
+    news_count = len(snapshot.get("news") or [])
+    news_factor = min(news_count, 5) / 5
+    score = SENTIMENT_WEIGHT * sentiment_score + NEWS_WEIGHT * news_factor
+    return round(score, 2)
 
 
 async def gather_symbol_insights(symbol: str | None = None) -> Dict[str, Any]:
@@ -39,17 +84,21 @@ async def gather_symbol_insights(symbol: str | None = None) -> Dict[str, Any]:
     stockdata_task = fetch_stockdata_quote(target_symbol)
     alpaca_task = fetch_alpaca_latest_quote(target_symbol)
     yfinance_task = fetch_yfinance_snapshot(target_symbol)
+    snapshot_task = get_market_snapshot(target_symbol)
 
-    finviz, stockdata, alpaca, yfinance_data = await asyncio.gather(
+    finviz, stockdata, alpaca, yfinance_data, market_snapshot = await asyncio.gather(
         finviz_task,
         stockdata_task,
         alpaca_task,
         yfinance_task,
+        snapshot_task,
     )
 
     result = {
         "symbol": target_symbol,
         "sources": [finviz, stockdata, alpaca, yfinance_data],
+        "market_snapshot": market_snapshot,
+        "score": score_stock(market_snapshot),
     }
     _store_cached_insights(target_symbol, now, result)
     return result
@@ -126,3 +175,27 @@ def _get_cached_insights(symbol: str, now: datetime) -> Dict[str, Any] | None:
 
 def _store_cached_insights(symbol: str, timestamp: datetime, payload: Dict[str, Any]) -> None:
     INSIGHTS_CACHE[symbol] = (timestamp, payload)
+
+
+async def _get_price_with_fallback(symbol: str) -> Optional[float]:
+    try:
+        return await get_massive_quote(symbol)
+    except Exception as exc:  # pragma: no cover - network guard
+        logger.warning("Massive quote failed for %s: %s", symbol, exc)
+    try:
+        return await get_finnhub_quote(symbol)
+    except Exception as exc:  # pragma: no cover - network guard
+        logger.warning("Finnhub quote fallback failed for %s: %s", symbol, exc)
+    return None
+
+
+def _extract_sentiment_score(payload: Dict[str, Any]) -> float:
+    raw = payload.get("score")
+    if raw is None:
+        raw = payload.get("companyNewsScore")
+    if raw is None:
+        raw = payload.get("bullishPercent")
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return 0.0

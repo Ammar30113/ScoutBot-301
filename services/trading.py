@@ -1,7 +1,9 @@
+import json
 import os
 import threading
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
 
 import alpaca_trade_api as tradeapi
 
@@ -15,16 +17,92 @@ logger = get_logger(__name__)
 settings = get_settings()
 
 TRADING_BUDGET = float(os.getenv("TRADING_BUDGET", settings.trading_budget))
+DAILY_BUDGET = float(os.getenv("DAILY_BUDGET_USD", settings.daily_budget_usd))
 ALLOCATION_RATIO = 0.10
 TAKE_PROFIT_RATIO = 0.08
 STOP_LOSS_RATIO = 0.04
 MAX_UTILIZATION = 0.8
+MIN_CONFIDENCE = 0.02
+MAX_CONFIDENCE = 0.15
+DEFAULT_CONFIDENCE = 0.08
+PORTFOLIO_FILE = Path(os.getenv("PORTFOLIO_FILE", "data/portfolio_state.json"))
+MODE = os.getenv("MODE", settings.mode)
 
 _alpaca_client: Optional[tradeapi.REST] = None
 STATE_LOCK = threading.Lock()
 ALLOCATED_CAPITAL = 0.0
 TRADE_LOG: List[Dict[str, Any]] = []
 MAX_LOG_LENGTH = 100
+
+
+def _today_iso() -> str:
+    return datetime.utcnow().date().isoformat()
+
+
+def _empty_portfolio_state(date_str: Optional[str] = None) -> Dict[str, Any]:
+    return {"date": date_str or _today_iso(), "budget_used": 0.0, "positions": []}
+
+
+def _load_portfolio_state_unlocked() -> Dict[str, Any]:
+    if not PORTFOLIO_FILE.exists():
+        return _empty_portfolio_state()
+    try:
+        with PORTFOLIO_FILE.open("r", encoding="utf-8") as handle:
+            return json.load(handle)
+    except (OSError, json.JSONDecodeError) as exc:
+        logger.warning("Unable to load portfolio state, resetting: %s", exc)
+        return _empty_portfolio_state()
+
+
+def _save_portfolio_state_unlocked(state: Dict[str, Any]) -> None:
+    try:
+        PORTFOLIO_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with PORTFOLIO_FILE.open("w", encoding="utf-8") as handle:
+            json.dump(state, handle, indent=2)
+    except OSError as exc:
+        logger.warning("Unable to persist portfolio state: %s", exc)
+
+
+def _ensure_today_portfolio_state_unlocked() -> Dict[str, Any]:
+    state = _load_portfolio_state_unlocked()
+    today = _today_iso()
+    if state.get("date") != today:
+        state = _empty_portfolio_state(today)
+        _save_portfolio_state_unlocked(state)
+    return state
+
+
+def _get_remaining_daily_budget() -> float:
+    with STATE_LOCK:
+        state = _ensure_today_portfolio_state_unlocked()
+        remaining = DAILY_BUDGET - float(state.get("budget_used", 0.0))
+        return max(remaining, 0.0)
+
+
+def _record_portfolio_trade(symbol: str, qty: int, price: float) -> None:
+    cost = qty * price
+    with STATE_LOCK:
+        state = _ensure_today_portfolio_state_unlocked()
+        state["budget_used"] = float(state.get("budget_used", 0.0)) + cost
+        state.setdefault("positions", []).append(
+            {
+                "symbol": symbol,
+                "qty": qty,
+                "price": round(price, 2),
+                "timestamp": datetime.utcnow().isoformat(),
+            }
+        )
+        _save_portfolio_state_unlocked(state)
+
+
+def _calculate_allocation_from_confidence(confidence: Optional[float]) -> Tuple[float, float]:
+    try:
+        value = float(confidence) if confidence is not None else DEFAULT_CONFIDENCE
+    except (TypeError, ValueError):
+        value = DEFAULT_CONFIDENCE
+    capped = max(MIN_CONFIDENCE, min(MAX_CONFIDENCE, value))
+    allocation = capped * DAILY_BUDGET
+    return allocation, capped
 
 
 def get_account_cash(alpaca: tradeapi.REST) -> float:
@@ -41,17 +119,41 @@ def get_allocated_capital() -> float:
         return ALLOCATED_CAPITAL
 
 
-def maybe_trade(symbol: str) -> bool:
+def maybe_trade(symbol: str, confidence: Optional[float] = None) -> bool:
     """
-    Attempt to open a bracket order for the provided symbol, obeying budget limits.
+    Attempt to open a bracket order for the provided symbol, observing daily limits.
     Returns False when the caller should stop evaluating additional symbols.
     """
     symbol = symbol.upper()
-    allocation = TRADING_BUDGET * ALLOCATION_RATIO
+    planned_allocation, confidence_used = _calculate_allocation_from_confidence(confidence)
     max_capital = MAX_UTILIZATION * TRADING_BUDGET
+    remaining_daily = _get_remaining_daily_budget()
+
+    if remaining_daily <= 0:
+        msg = "Daily budget exhausted"
+        logger.info("%s skipped - %s", symbol, msg)
+        _record_action(
+            symbol,
+            "skipped",
+            msg,
+            {"daily_budget": DAILY_BUDGET, "confidence": confidence_used},
+        )
+        return False
+
+    allocation = min(planned_allocation, TRADING_BUDGET * ALLOCATION_RATIO, remaining_daily)
 
     if allocation <= 0:
-        _record_action(symbol, "skipped", "Allocation is zero", {"budget": TRADING_BUDGET})
+        _record_action(
+            symbol,
+            "skipped",
+            "Allocation is zero",
+            {
+                "budget": TRADING_BUDGET,
+                "daily_budget": DAILY_BUDGET,
+                "confidence": confidence_used,
+                "planned_allocation": planned_allocation,
+            },
+        )
         return False
 
     alpaca = _get_alpaca_client()
@@ -89,7 +191,12 @@ def maybe_trade(symbol: str) -> bool:
             symbol,
             "skipped",
             msg,
-            {"cash": cash_balance, "allocation": allocation, "price": entry_price},
+            {
+                "cash": cash_balance,
+                "allocation": allocation,
+                "price": entry_price,
+                "confidence": confidence_used,
+            },
         )
         return True
 
@@ -128,6 +235,7 @@ def maybe_trade(symbol: str) -> bool:
             stop_loss={"stop_price": stop_loss},
         )
         _increment_allocation(position_cost)
+        _record_portfolio_trade(symbol, qty, entry_price)
         logger.info(
             "%s: entry %.2f, TP %.2f, SL %.2f, qty %s",
             symbol,
@@ -145,6 +253,7 @@ def maybe_trade(symbol: str) -> bool:
                 "qty": qty,
                 "take_profit": take_profit,
                 "stop_loss": stop_loss,
+                "confidence": confidence_used,
             },
         )
     except Exception as exc:  # pragma: no cover - network
@@ -198,6 +307,7 @@ def _record_action(symbol: str, status: str, reason: str, details: Optional[Dict
         "reason": reason,
         "details": details or {},
         "timestamp": datetime.utcnow().isoformat(),
+        "mode": MODE,
     }
     with STATE_LOCK:
         TRADE_LOG.append(entry)

@@ -15,6 +15,14 @@ class Settings(BaseSettings):
         default=None,
         validation_alias="STOCKDATA_API_KEY",
     )
+    massive_api_key: Optional[str] = Field(
+        default=None,
+        validation_alias="MASSIVE_API_KEY",
+    )
+    finnhub_api_key: Optional[str] = Field(
+        default=None,
+        validation_alias="FINNHUB_API_KEY",
+    )
     alpaca_api_key: Optional[str] = Field(
         default=None,
         validation_alias=AliasChoices("ALPACA_API_KEY", "APCA_API_KEY_ID"),
@@ -33,6 +41,8 @@ class Settings(BaseSettings):
     )
     default_symbol: str = Field(default="SPY", validation_alias="DEFAULT_SYMBOL")
     trading_budget: float = Field(default=1000.0, validation_alias="TRADING_BUDGET")
+    daily_budget_usd: float = Field(default=10000.0, validation_alias="DAILY_BUDGET_USD")
+    mode: str = Field(default="paper", validation_alias="MODE")
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
