@@ -22,10 +22,11 @@ def _log_api_key_status(key: Optional[str]) -> None:
         _logged_missing_key = True
 
 
-def _get_api_key() -> Optional[str]:
-    key = os.getenv("MASSIVE_API_KEY")
-    _log_api_key_status(key)
-    return key
+def _get_env_key(name: str) -> Optional[str]:
+    value = os.getenv(name)
+    if name == "MASSIVE_API_KEY":
+        _log_api_key_status(value)
+    return value
 
 
 _log_api_key_status(os.getenv("MASSIVE_API_KEY"))
@@ -34,7 +35,7 @@ _log_api_key_status(os.getenv("MASSIVE_API_KEY"))
 def get_massive_data(symbol: str) -> Optional[Dict[str, Any]]:
     """Fetch dividend or quote data for ``symbol`` from Massive.com."""
 
-    api_key = _get_api_key()
+    api_key = _get_env_key("MASSIVE_API_KEY")
     if not api_key:
         return None
 
@@ -59,15 +60,57 @@ async def get_quote(symbol: str) -> Optional[float]:
         return None
 
     data = await asyncio.to_thread(get_massive_data, symbol)
-    if not data:
-        return None
+    price = _extract_price(data)
+    if price is not None:
+        return price
 
-    results = data.get("results") if isinstance(data, dict) else None
-    if not results:
+    fallback_price = await asyncio.to_thread(_fetch_stockdata_price, symbol)
+    if fallback_price is not None:
+        logging.info(f"[INFO] massive_client - StockData fallback price for {symbol.upper()}: {fallback_price}")
+    return fallback_price
+
+
+def _extract_price(data: Optional[Dict[str, Any]]) -> Optional[float]:
+    if not isinstance(data, dict):
+        return None
+    results = data.get("results") or []
+    if not isinstance(results, list) or not results:
         return None
 
     record = results[0]
     for field in ("price", "lastTradePrice", "lastPrice", "close", "amount"):
+        value = record.get(field)
+        if value is None:
+            continue
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _fetch_stockdata_price(symbol: str) -> Optional[float]:
+    api_key = _get_env_key("STOCKDATA_API_KEY")
+    if not api_key:
+        return None
+
+    url = "https://api.stockdata.org/v1/data/quote"
+    params = {"symbols": symbol.upper(), "api_token": api_key}
+
+    try:
+        resp = requests.get(url, params=params, timeout=10)
+        resp.raise_for_status()
+        payload = resp.json()
+    except requests.exceptions.RequestException as exc:
+        logging.error(f"[ERROR] massive_client - StockData fallback failed for {symbol.upper()}: {exc}")
+        return None
+
+    records = payload.get("data") or []
+    if not records:
+        return None
+
+    record = records[0]
+    for field in ("price", "last", "close", "previous_close_price", "prev_close"):
         value = record.get(field)
         if value is None:
             continue
