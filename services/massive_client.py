@@ -1,7 +1,7 @@
 import asyncio
 import logging
 import os
-from typing import Optional
+from typing import Any, Dict, Optional
 
 import requests
 from dotenv import load_dotenv
@@ -9,82 +9,55 @@ from dotenv import load_dotenv
 load_dotenv()
 
 MASSIVE_API_KEY = os.getenv("MASSIVE_API_KEY")
-QUOTE_ENDPOINT = "https://api.massive.com/v1/quotes/{symbol}"
+
+if MASSIVE_API_KEY:
+    logging.info("[INFO] massive_client - MASSIVE_API_KEY loaded successfully")
+else:  # pragma: no cover - configuration guard
+    logging.warning("[WARN] MASSIVE_API_KEY missing; skipping Massive request")
 
 
-async def get_quote(symbol: str) -> Optional[float]:
-    """Return the latest Massive.com quote for ``symbol`` or ``None`` on failure."""
+def get_massive_data(symbol: str) -> Optional[Dict[str, Any]]:
+    """Fetch dividend or quote data for ``symbol`` from Massive.com."""
 
-    normalized = (symbol or "").strip().upper()
-    if not normalized:
-        logging.error("[ERROR] massive_client - Symbol required for Massive quote lookup")
-        return None
-
-    return await asyncio.to_thread(_fetch_quote, normalized)
-
-
-def _fetch_quote(symbol: str) -> Optional[float]:
     if not MASSIVE_API_KEY:
         logging.warning("[WARN] MASSIVE_API_KEY missing; skipping Massive request")
         return None
 
-    url = QUOTE_ENDPOINT.format(symbol=symbol)
     headers = {"Authorization": f"Bearer {MASSIVE_API_KEY}"}
+    url = f"https://api.massive.com/v3/reference/dividends?ticker={symbol.upper()}"
 
     try:
-        response = requests.get(url, headers=headers, timeout=10)
+        resp = requests.get(url, headers=headers, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+        logging.info(f"[INFO] massive_client - Retrieved data for {symbol.upper()}")
+        return data
     except requests.exceptions.RequestException as exc:
-        logging.error(f"[ERROR] massive_client - Request error for {symbol}: {exc}")
+        logging.error(f"[ERROR] massive_client - {exc}")
         return None
 
-    if response.status_code >= 400:
-        logging.error(
-            "[ERROR] massive_client - Massive API returned %s for %s: %s",
-            response.status_code,
-            symbol,
-            response.text,
-        )
+
+async def get_quote(symbol: str) -> Optional[float]:
+    """Compatibility helper that returns a numeric price when available."""
+
+    if not symbol:
         return None
 
-    try:
-        payload = response.json()
-    except ValueError:
-        logging.error("[ERROR] massive_client - Unexpected JSON payload for %s", symbol)
+    data = await asyncio.to_thread(get_massive_data, symbol)
+    if not data:
         return None
 
-    price = _extract_price(payload)
-    if price is None:
-        logging.error("[ERROR] massive_client - Missing price field in response for %s: %s", symbol, payload)
+    results = data.get("results") if isinstance(data, dict) else None
+    if not results:
         return None
 
-    logging.info("[INFO] massive_client - Connected successfully using MASSIVE_API_KEY")
-    logging.info(f"[INFO] massive_client - Connected successfully, price for {symbol}: {price}")
-    return price
-
-
-def _extract_price(payload: object) -> Optional[float]:
-    if not isinstance(payload, dict):
-        return None
-
-    candidates = [
-        payload.get("price"),
-        payload.get("lastTradePrice"),
-        payload.get("lastPrice"),
-        payload.get("close"),
-        payload.get("c"),
-        payload.get("p"),
-    ]
-
-    quote = payload.get("quote") if isinstance(payload.get("quote"), dict) else None
-    if quote:
-        candidates.append(quote.get("price"))
-        candidates.append(quote.get("lastTradePrice"))
-
-    for candidate in candidates:
+    record = results[0]
+    for field in ("price", "lastTradePrice", "lastPrice", "close", "amount"):
+        value = record.get(field)
+        if value is None:
+            continue
         try:
-            if candidate is not None:
-                return float(candidate)
+            return float(value)
         except (TypeError, ValueError):
             continue
-
     return None
