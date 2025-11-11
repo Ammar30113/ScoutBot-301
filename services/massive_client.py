@@ -15,11 +15,11 @@ from .stockdata import fetch_stockdata_quote
 API_KEY = os.getenv("MASSIVE_API_KEY")
 BASE_URL = "https://api.massive.com/v3"
 
-if not API_KEY:  # pragma: no cover - configuration guard
-    raise EnvironmentError("MASSIVE_API_KEY not found in environment variables")
-
 
 def get_massive_data(endpoint: str, params: Optional[Dict[str, Any]] = None) -> Optional[List[Dict[str, Any]]]:
+    if not API_KEY:
+        logging.warning("[WARN] massive_client - MASSIVE_API_KEY missing; skipping Massive request")
+        return None
     headers = {"Authorization": f"Bearer {API_KEY}"}
     try:
         response = requests.get(f"{BASE_URL}{endpoint}", headers=headers, params=params, timeout=10)
