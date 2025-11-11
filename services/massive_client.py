@@ -8,39 +8,45 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-_logged_loaded_key = False
-_logged_missing_key = False
+_ENV_STATUS: Dict[str, str] = {}
+MASSIVE_QUOTES_URL = "https://api.massive.com/v1/quotes/{symbol}"
+STOCKDATA_URL = "https://api.stockdata.org/v1/data/quote"
 
 
-def _log_api_key_status(key: Optional[str]) -> None:
-    global _logged_loaded_key, _logged_missing_key
-    if key and not _logged_loaded_key:
-        logging.info("[INFO] massive_client - MASSIVE_API_KEY loaded successfully")
-        _logged_loaded_key = True
-    elif not key and not _logged_missing_key:
-        logging.warning("[WARN] MASSIVE_API_KEY missing; skipping Massive request")
-        _logged_missing_key = True
+def _log_env_status(name: str, value: Optional[str]) -> None:
+    previous = _ENV_STATUS.get(name)
+    if value and previous != "loaded":
+        msg = "[INFO] massive_client - MASSIVE_API_KEY loaded successfully" if name == "MASSIVE_API_KEY" else f"[INFO] massive_client - {name} detected"
+        logging.info(msg)
+        _ENV_STATUS[name] = "loaded"
+    elif not value and previous != "missing":
+        if name == "MASSIVE_API_KEY":
+            logging.warning("[WARN] MASSIVE_API_KEY missing; skipping Massive request")
+        elif name == "STOCKDATA_API_KEY":
+            logging.warning("[WARN] StockData fallback disabled (STOCKDATA_API_KEY missing)")
+        else:
+            logging.warning("[WARN] %s missing", name)
+        _ENV_STATUS[name] = "missing"
 
 
 def _get_env_key(name: str) -> Optional[str]:
     value = os.getenv(name)
-    if name == "MASSIVE_API_KEY":
-        _log_api_key_status(value)
+    _log_env_status(name, value)
     return value
 
 
-_log_api_key_status(os.getenv("MASSIVE_API_KEY"))
+_get_env_key("MASSIVE_API_KEY")
 
 
 def get_massive_data(symbol: str) -> Optional[Dict[str, Any]]:
-    """Fetch dividend or quote data for ``symbol`` from Massive.com."""
+    """Fetch quote data for ``symbol`` from Massive.com v1 quotes endpoint."""
 
     api_key = _get_env_key("MASSIVE_API_KEY")
     if not api_key:
         return None
 
+    url = MASSIVE_QUOTES_URL.format(symbol=symbol.upper())
     headers = {"Authorization": f"Bearer {api_key}"}
-    url = f"https://api.massive.com/v3/reference/dividends?ticker={symbol.upper()}"
 
     try:
         resp = requests.get(url, headers=headers, timeout=10)
@@ -48,13 +54,22 @@ def get_massive_data(symbol: str) -> Optional[Dict[str, Any]]:
         data = resp.json()
         logging.info(f"[INFO] massive_client - Retrieved data for {symbol.upper()}")
         return data
+    except requests.exceptions.HTTPError as exc:
+        status = exc.response.status_code if exc.response else "unknown"
+        logging.error(
+            "[ERROR] massive_client - Massive API %s for %s: %s",
+            status,
+            symbol.upper(),
+            exc.response.text if exc.response else exc,
+        )
+        return None
     except requests.exceptions.RequestException as exc:
-        logging.error(f"[ERROR] massive_client - {exc}")
+        logging.error("[ERROR] massive_client - Massive request failed for %s: %s", symbol.upper(), exc)
         return None
 
 
 async def get_quote(symbol: str) -> Optional[float]:
-    """Compatibility helper that returns a numeric price when available."""
+    """Return the latest price from Massive with StockData fallback when possible."""
 
     if not symbol:
         return None
@@ -62,6 +77,7 @@ async def get_quote(symbol: str) -> Optional[float]:
     data = await asyncio.to_thread(get_massive_data, symbol)
     price = _extract_price(data)
     if price is not None:
+        logging.info(f"[INFO] massive_client - Price for {symbol.upper()}: {price}")
         return price
 
     fallback_price = await asyncio.to_thread(_fetch_stockdata_price, symbol)
@@ -70,22 +86,40 @@ async def get_quote(symbol: str) -> Optional[float]:
     return fallback_price
 
 
-def _extract_price(data: Optional[Dict[str, Any]]) -> Optional[float]:
-    if not isinstance(data, dict):
-        return None
-    results = data.get("results") or []
-    if not isinstance(results, list) or not results:
+def _extract_price(payload: Optional[Dict[str, Any]]) -> Optional[float]:
+    if not isinstance(payload, dict):
         return None
 
-    record = results[0]
-    for field in ("price", "lastTradePrice", "lastPrice", "close", "amount"):
-        value = record.get(field)
-        if value is None:
+    candidates = []
+    if isinstance(payload.get("result"), dict):
+        candidates.append(payload["result"])
+    if isinstance(payload.get("results"), list) and payload["results"]:
+        candidates.append(payload["results"][0])
+    if isinstance(payload.get("data"), dict):
+        candidates.append(payload["data"])
+    candidates.append(payload)
+
+    for record in candidates:
+        if not isinstance(record, dict):
             continue
-        try:
-            return float(value)
-        except (TypeError, ValueError):
-            continue
+        for key in ("price", "lastTradePrice", "lastPrice", "close", "c", "p"):
+            value = record.get(key)
+            if value is None:
+                continue
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                continue
+        last_trade = record.get("lastTrade")
+        if isinstance(last_trade, dict):
+            for key in ("price", "p", "lastPrice"):
+                value = last_trade.get(key)
+                if value is None:
+                    continue
+                try:
+                    return float(value)
+                except (TypeError, ValueError):
+                    continue
     return None
 
 
@@ -94,15 +128,26 @@ def _fetch_stockdata_price(symbol: str) -> Optional[float]:
     if not api_key:
         return None
 
-    url = "https://api.stockdata.org/v1/data/quote"
     params = {"symbols": symbol.upper(), "api_token": api_key}
 
     try:
-        resp = requests.get(url, params=params, timeout=10)
+        resp = requests.get(STOCKDATA_URL, params=params, timeout=10)
         resp.raise_for_status()
         payload = resp.json()
+    except requests.exceptions.HTTPError as exc:
+        status = exc.response.status_code if exc.response else "unknown"
+        if status == 402:
+            logging.warning("[WARN] massive_client - StockData quota/plan limit hit for %s", symbol.upper())
+        else:
+            logging.error(
+                "[ERROR] massive_client - StockData HTTP %s for %s: %s",
+                status,
+                symbol.upper(),
+                exc.response.text if exc.response else exc,
+            )
+        return None
     except requests.exceptions.RequestException as exc:
-        logging.error(f"[ERROR] massive_client - StockData fallback failed for {symbol.upper()}: {exc}")
+        logging.error("[ERROR] massive_client - StockData fallback failed for %s: %s", symbol.upper(), exc)
         return None
 
     records = payload.get("data") or []
