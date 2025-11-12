@@ -20,7 +20,7 @@ _MASSIVE_READY: bool = False
 _STOCKDATA_WARNING_EMITTED = False
 
 
-def load_massive_key() -> str:
+def load_massive_key() -> Optional[str]:
     """Load Massive API key from env (supports MASSIVE_API_KEY and POLYGON_API_KEY)."""
 
     key = os.getenv("MASSIVE_API_KEY") or os.getenv("POLYGON_API_KEY")
@@ -28,7 +28,7 @@ def load_massive_key() -> str:
 
     if not key:
         logger.error("❌ MASSIVE_API_KEY missing! Verify Railway environment variables.")
-        raise RuntimeError("MASSIVE_API_KEY not found in environment variables.")
+        return None
 
     logger.info("✅ MASSIVE_API_KEY loaded successfully.")
     return key
@@ -57,26 +57,35 @@ def test_massive_connection(key: str) -> None:
     logger.warning("Response body: %s", response.text[:200])
 
 
-def _ensure_massive_ready() -> str:
+def _ensure_massive_ready() -> Optional[str]:
     """Ensure the Massive API key is loaded and validated once."""
 
     global _MASSIVE_API_KEY, _MASSIVE_READY
     if _MASSIVE_API_KEY is None:
         _MASSIVE_API_KEY = load_massive_key()
+    if not _MASSIVE_API_KEY:
+        return None
     if not _MASSIVE_READY:
         test_massive_connection(_MASSIVE_API_KEY)
         _MASSIVE_READY = True
     return _MASSIVE_API_KEY
 
 
-# Run validation at import time so startup fails fast if Massive auth is broken.
-_ensure_massive_ready()
+# Run validation at import time when a key exists, but allow startup without one.
+if load_massive_key():
+_INITIAL_KEY = load_massive_key()
+if _INITIAL_KEY:
+    _MASSIVE_API_KEY = _INITIAL_KEY
+    _ensure_massive_ready()
 
 
 def get_massive_data(symbol: str) -> Optional[Dict[str, Any]]:
     """Fetch quote data for ``symbol`` from Massive.com v1 quotes endpoint."""
 
     api_key = _ensure_massive_ready()
+    if not api_key:
+        logger.warning("[WARN] massive_client - Missing MASSIVE_API_KEY; cannot fetch %s", symbol.upper())
+        return None
 
     url = MASSIVE_QUOTES_URL.format(symbol=symbol.upper())
     headers = {"Authorization": f"Bearer {api_key}"}
