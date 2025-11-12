@@ -62,7 +62,7 @@ def _request(path: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, An
 
 def _verify_connectivity() -> None:
     try:
-        _request("/reference/markets", params={"limit": 1})
+        _request("/reference/tickers/AAPL/aggregates", params={"timespan": "day", "limit": 1})
     except Exception as exc:
         logger.error("[❌] Massive API connectivity test failed: %s", exc)
         raise SystemExit(1)
