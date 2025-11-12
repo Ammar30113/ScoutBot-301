@@ -7,6 +7,7 @@ previous Massive wrapper while staying lightweight and deployment-safe.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import time
@@ -60,16 +61,24 @@ def _request(path: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, An
     raise RuntimeError("Massive API unreachable")
 
 
-def _verify_connectivity() -> None:
+def verify_connectivity(raise_on_failure: bool = False) -> bool:
+    """
+    Manually verify Massive API connectivity.
+
+    The check is opt-in so local development and CI environments without
+    internet access do not fail at import time.
+    """
+
     try:
         _request("/reference/tickers/AAPL/aggregates", params={"timespan": "day", "limit": 1})
     except Exception as exc:
         logger.error("[❌] Massive API connectivity test failed: %s", exc)
-        raise SystemExit(1)
+        if raise_on_failure:
+            raise RuntimeError("Massive API unreachable") from exc
+        return False
+
     logger.info("[✅] Massive API verified and operational")
-
-
-_verify_connectivity()
+    return True
 
 
 def get_latest_quote(symbol: str) -> Optional[Dict[str, Any]]:
@@ -96,3 +105,14 @@ def get_latest_quote(symbol: str) -> Optional[Dict[str, Any]]:
     data = {"symbol": symbol, "price": price, "timestamp": timestamp}
     logger.info("[📈] %s Massive snapshot: %s", symbol, data)
     return data
+
+
+async def get_quote(symbol: str) -> Optional[float]:
+    """
+    Async-friendly helper that mirrors the previous Massive SDK signature.
+    """
+
+    snapshot = await asyncio.to_thread(get_latest_quote, symbol)
+    if not snapshot:
+        return None
+    return snapshot.get("price")
