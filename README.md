@@ -1,13 +1,13 @@
 # Microcap Scout Bot (Clean FastAPI Rebuild)
 
-Microcap Scout Bot is a FastAPI-based backend that aggregates data from Finviz, StockData.org, Massive, Finnhub, and Alpaca to power microcap-focused scouting tools. This repo is a clean rebuild of the previous app, aligned with the confirmed architecture and deployment targets (Railway + Docker).
+Microcap Scout Bot is a FastAPI-based backend that aggregates data from Finviz, Massive, Finnhub, and Alpaca to power microcap-focused scouting tools. This repo is a clean rebuild of the previous app, aligned with the confirmed architecture and deployment targets (Railway + Docker).
 
 ## Features
 - FastAPI app with `uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}` (Railway/Heroku set `PORT` automatically).
 - `/` health and `/products.json` catalog endpoints stay stable while exposing the latest universe + trade log.
 - Hybrid scanner merges Finviz microcaps with filtered large caps (AAPL, NVDA, TSLA, etc.) and runs daily.
 - Trading engine uses Alpaca bracket orders (8% TP / 4% SL) with utilization guardrails, Massive-powered pricing, and a $10k configurable daily budget allocator plus end-of-day summaries.
-- Service layer integrates Finviz, StockData.org, Massive, Finnhub, and Alpaca, backed by in-memory caching and throttling.
+- Service layer integrates Finviz, Massive, Finnhub, and Alpaca, backed by in-memory caching and throttling.
 - Environment-driven configuration with `.env.example`, Dockerfile + Procfile for Railway.
 
 ## Project Structure
@@ -29,7 +29,6 @@ Microcap Scout Bot is a FastAPI-based backend that aggregates data from Finviz, 
 │   ├── finviz.py
 │   ├── market_data.py
 │   ├── massive_client.py
-│   ├── stockdata.py
 │   └── trading.py
 ├── utils/
 │   ├── __init__.py
@@ -62,7 +61,6 @@ cp .env.example .env
 
 Required keys:
 - `FINVIZ_TOKEN` (Finviz screener)
-- `STOCKDATA_API_KEY`
 - `MASSIVE_API_KEY`
 - `FINNHUB_API_KEY`
 - `APCA_API_KEY_ID`, `APCA_API_SECRET_KEY`

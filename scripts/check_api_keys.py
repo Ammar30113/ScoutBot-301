@@ -5,7 +5,7 @@ import requests
 
 
 def check_env_vars() -> None:
-    keys = ["MASSIVE_API_KEY", "FINNHUB_API_KEY", "STOCKDATA_API_KEY"]
+    keys = ["MASSIVE_API_KEY", "FINNHUB_API_KEY"]
     print("🔍 Checking environment variables...\n")
     for key in keys:
         value = os.getenv(key)
@@ -54,32 +54,11 @@ def check_finnhub() -> None:
         print(f"🔥 Finnhub connection error: {exc}")
 
 
-def check_stockdata() -> None:
-    key = os.getenv("STOCKDATA_API_KEY")
-    if not key:
-        print("\n[StockData] ❌ Missing key, skipping test.")
-        return
-    url = f"https://api.stockdata.org/v1/data/quote?symbols=AAPL&api_token={key}"
-    try:
-        response = requests.get(url, timeout=10)
-        print(f"\n[StockData] Response: {response.status_code} → {response.reason}")
-        if response.status_code == 200:
-            print("✅ StockData API reachable and key is valid.")
-        elif response.status_code == 401:
-            print("🚫 Invalid StockData key.")
-        else:
-            print(f"⚠️ StockData returned: {response.status_code}")
-    except Exception as exc:
-        print(f"🔥 StockData connection error: {exc}")
+def main() -> None:
+    check_env_vars()
+    check_massive()
+    check_finnhub()
 
 
-+def main() -> None:
-+    check_env_vars()
-+    check_massive()
-+    check_finnhub()
-+    check_stockdata()
-+
-+
-+if __name__ == "__main__":
-+    main()
-+
+if __name__ == "__main__":
+    main()

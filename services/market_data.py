@@ -11,7 +11,6 @@ from .finviz import fetch_finviz_snapshot, fetch_microcap_screen
 from .finnhub_client import get_company_news as get_finnhub_company_news
 from .finnhub_client import get_sentiment as get_finnhub_sentiment
 from .massive_client import get_quote as get_massive_quote
-from .stockdata import fetch_stockdata_quote
 
 logger = get_logger(__name__)
 
@@ -73,7 +72,7 @@ def score_stock(snapshot: Dict[str, Any]) -> float:
 
 async def gather_symbol_insights(symbol: str | None = None) -> Dict[str, Any]:
     """
-    Fetch a blended market snapshot from Finviz, StockData, Alpaca, and Massive/Finnhub enrichments.
+    Fetch a blended market snapshot from Finviz, Alpaca, and Massive/Finnhub enrichments.
     """
     settings = get_settings()
     target_symbol = (symbol or settings.default_symbol).upper()
@@ -85,20 +84,14 @@ async def gather_symbol_insights(symbol: str | None = None) -> Dict[str, Any]:
     logger.info("Gathering insights for %s", target_symbol)
 
     finviz_task = fetch_finviz_snapshot(target_symbol)
-    stockdata_task = fetch_stockdata_quote(target_symbol)
     alpaca_task = fetch_alpaca_latest_quote(target_symbol)
     snapshot_task = get_market_snapshot(target_symbol)
 
-    finviz, stockdata, alpaca, market_snapshot = await asyncio.gather(
-        finviz_task,
-        stockdata_task,
-        alpaca_task,
-        snapshot_task,
-    )
+    finviz, alpaca, market_snapshot = await asyncio.gather(finviz_task, alpaca_task, snapshot_task)
 
     result = {
         "symbol": target_symbol,
-        "sources": [finviz, stockdata, alpaca],
+        "sources": [finviz, alpaca],
         "market_snapshot": market_snapshot,
         "score": score_stock(market_snapshot),
     }

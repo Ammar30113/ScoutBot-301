@@ -37,8 +37,8 @@ PRODUCT_CATALOG: List[Product] = [
     Product(
         name="Microcap Screener",
         slug="microcap-screener",
-        description="Async screener that blends Finviz filters with StockData fundamentals for near-real-time scans.",
-        integrations=["Finviz", "StockData"],
+        description="Async screener powered by Finviz filters for near-real-time scans.",
+        integrations=["Finviz"],
         sample_symbol="IWM",
     ),
     Product(

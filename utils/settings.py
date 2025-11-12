@@ -11,10 +11,6 @@ class Settings(BaseSettings):
         default=None,
         validation_alias=AliasChoices("FINVIZ_API_KEY", "FINVIZ_TOKEN"),
     )
-    stockdata_api_key: Optional[str] = Field(
-        default=None,
-        validation_alias="STOCKDATA_API_KEY",
-    )
     massive_api_key: Optional[str] = Field(
         default=None,
         validation_alias="MASSIVE_API_KEY",

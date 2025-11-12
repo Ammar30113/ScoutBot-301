@@ -18,7 +18,7 @@ _strategy_task: asyncio.Task | None = None
 
 app = FastAPI(
     title="Microcap Scout Bot",
-    description="Microcap Scout Bot - clean FastAPI rebuild with Finviz, StockData, Alpaca, and hybrid trade logic.",
+    description="Microcap Scout Bot - clean FastAPI rebuild with Finviz, Massive, Finnhub, Alpaca, and hybrid trade logic.",
     version="0.2.0",
     contact={"name": "Microcap Scout Bot", "url": "https://github.com/Ammar30113/microcap-scout-bot-clean"},
 )
