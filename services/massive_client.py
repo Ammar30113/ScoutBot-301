@@ -8,49 +8,75 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("massive_client")
+logger.setLevel(logging.INFO)
 
-MASSIVE_API_KEY = os.getenv("MASSIVE_API_KEY")
-if not MASSIVE_API_KEY:
-    MASSIVE_API_KEY = os.environ.get("MASSIVE_API_KEY")
-logger.info("MASSIVE_API_KEY detected: %s", bool(MASSIVE_API_KEY))
-
-_ENV_STATUS: Dict[str, str] = {}
 MASSIVE_QUOTES_URL = "https://api.massive.com/v1/quotes/{symbol}"
+MASSIVE_HEALTHCHECK_URL = "https://api.massive.com/v1/reference/markets"
 STOCKDATA_URL = "https://api.stockdata.org/v1/data/quote"
 
-
-def _log_env_status(name: str, value: Optional[str]) -> None:
-    previous = _ENV_STATUS.get(name)
-    if value and previous != "loaded":
-        msg = "[INFO] massive_client - MASSIVE_API_KEY loaded successfully" if name == "MASSIVE_API_KEY" else f"[INFO] massive_client - {name} detected"
-        logger.info(msg)
-        _ENV_STATUS[name] = "loaded"
-    elif not value and previous != "missing":
-        if name == "MASSIVE_API_KEY":
-            logger.warning("[WARN] MASSIVE_API_KEY missing; skipping Massive request")
-        elif name == "STOCKDATA_API_KEY":
-            logger.warning("[WARN] StockData fallback disabled (STOCKDATA_API_KEY missing)")
-        else:
-            logger.warning("[WARN] %s missing", name)
-        _ENV_STATUS[name] = "missing"
+_MASSIVE_API_KEY: Optional[str] = None
+_MASSIVE_READY: bool = False
+_STOCKDATA_WARNING_EMITTED = False
 
 
-def _get_env_key(name: str) -> Optional[str]:
-    value = os.getenv(name)
-    _log_env_status(name, value)
-    return value
+def load_massive_key() -> str:
+    """Load Massive API key from env (supports MASSIVE_API_KEY and POLYGON_API_KEY)."""
+
+    key = os.getenv("MASSIVE_API_KEY") or os.getenv("POLYGON_API_KEY")
+    logger.info("MASSIVE_API_KEY detected: %s", bool(key))
+
+    if not key:
+        logger.error("❌ MASSIVE_API_KEY missing! Verify Railway environment variables.")
+        raise RuntimeError("MASSIVE_API_KEY not found in environment variables.")
+
+    logger.info("✅ MASSIVE_API_KEY loaded successfully.")
+    return key
 
 
-_get_env_key("MASSIVE_API_KEY")
+def test_massive_connection(key: str) -> None:
+    """Test live connectivity to Massive and raise on auth failure."""
+
+    logger.info("🌐 Testing Massive API connectivity: %s", MASSIVE_HEALTHCHECK_URL)
+    headers = {"Authorization": f"Bearer {key}"}
+
+    try:
+        response = requests.get(MASSIVE_HEALTHCHECK_URL, headers=headers, timeout=10)
+    except requests.exceptions.RequestException as exc:
+        logger.error("🔥 Connection error while testing Massive API: %s", exc)
+        raise RuntimeError("Massive API connection test failed") from exc
+
+    if response.status_code == 200:
+        logger.info("✅ Massive API reachable and key is valid.")
+        return
+    if response.status_code == 401:
+        logger.error("🚫 Unauthorized — Invalid or expired MASSIVE_API_KEY.")
+        raise RuntimeError("Massive API authentication failed (401 Unauthorized).")
+
+    logger.warning("⚠️ Unexpected Massive API response: %s %s", response.status_code, response.reason)
+    logger.warning("Response body: %s", response.text[:200])
+
+
+def _ensure_massive_ready() -> str:
+    """Ensure the Massive API key is loaded and validated once."""
+
+    global _MASSIVE_API_KEY, _MASSIVE_READY
+    if _MASSIVE_API_KEY is None:
+        _MASSIVE_API_KEY = load_massive_key()
+    if not _MASSIVE_READY:
+        test_massive_connection(_MASSIVE_API_KEY)
+        _MASSIVE_READY = True
+    return _MASSIVE_API_KEY
+
+
+# Run validation at import time so startup fails fast if Massive auth is broken.
+_ensure_massive_ready()
 
 
 def get_massive_data(symbol: str) -> Optional[Dict[str, Any]]:
     """Fetch quote data for ``symbol`` from Massive.com v1 quotes endpoint."""
 
-    api_key = _get_env_key("MASSIVE_API_KEY")
-    if not api_key:
-        return None
+    api_key = _ensure_massive_ready()
 
     url = MASSIVE_QUOTES_URL.format(symbol=symbol.upper())
     headers = {"Authorization": f"Bearer {api_key}"}
@@ -131,8 +157,12 @@ def _extract_price(payload: Optional[Dict[str, Any]]) -> Optional[float]:
 
 
 def _fetch_stockdata_price(symbol: str) -> Optional[float]:
-    api_key = _get_env_key("STOCKDATA_API_KEY")
+    global _STOCKDATA_WARNING_EMITTED
+    api_key = os.getenv("STOCKDATA_API_KEY")
     if not api_key:
+        if not _STOCKDATA_WARNING_EMITTED:
+            logger.warning("[WARN] StockData fallback disabled (STOCKDATA_API_KEY missing)")
+            _STOCKDATA_WARNING_EMITTED = True
         return None
 
     params = {"symbols": symbol.upper(), "api_token": api_key}
