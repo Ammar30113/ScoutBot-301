@@ -19,6 +19,10 @@ class Settings(BaseSettings):
         default=None,
         validation_alias="FINNHUB_API_KEY",
     )
+    alpha_vantage_key: Optional[str] = Field(
+        default=None,
+        validation_alias="ALPHA_VANTAGE_KEY",
+    )
     alpaca_api_key: Optional[str] = Field(
         default=None,
         validation_alias=AliasChoices("ALPACA_API_KEY", "APCA_API_KEY_ID"),
@@ -34,6 +38,10 @@ class Settings(BaseSettings):
     alpaca_trading_url: AnyHttpUrl = Field(
         default="https://paper-api.alpaca.markets",
         validation_alias=AliasChoices("ALPACA_TRADING_BASE_URL", "APCA_API_BASE_URL"),
+    )
+    internal_massive_microservice_url: Optional[AnyHttpUrl] = Field(
+        default="https://thorough-adaptation-production.up.railway.app",
+        validation_alias="INTERNAL_MASSIVE_MICROSERVICE_URL",
     )
     default_symbol: str = Field(default="SPY", validation_alias="DEFAULT_SYMBOL")
     trading_budget: float = Field(default=1000.0, validation_alias="TRADING_BUDGET")
