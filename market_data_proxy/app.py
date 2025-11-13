@@ -23,3 +23,8 @@ async def get_price(symbol: str):
         logger.error("Unable to retrieve price for %s", symbol.upper())
         raise HTTPException(status_code=502, detail="No data sources available")
     return result
+
+
+@app.get("/health")
+async def health_check():
+    return {"status": "ok"}
