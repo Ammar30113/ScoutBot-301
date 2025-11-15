@@ -35,11 +35,19 @@ class MLClassifier:
         self.model = self._load_or_train_model()
 
     def _load_or_train_model(self) -> XGBClassifier:
-        if self.model_path.exists():
-            return joblib.load(self.model_path)
-        logger.warning("ML model missing; training placeholder classifier")
-        model = self._train_placeholder_model()
         self.model_path.parent.mkdir(parents=True, exist_ok=True)
+        if self.model_path.exists():
+            try:
+                return joblib.load(self.model_path)
+            except Exception as exc:  # pragma: no cover - defensive log
+                logger.warning(
+                    "Existing ML model %s is unreadable (%s); retraining placeholder",
+                    self.model_path,
+                    exc,
+                )
+        else:
+            logger.warning("ML model missing; training placeholder classifier")
+        model = self._train_placeholder_model()
         joblib.dump(model, self.model_path)
         return model
 
