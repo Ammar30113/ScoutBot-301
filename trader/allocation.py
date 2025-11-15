@@ -1,28 +1,20 @@
-from __future__ import annotations
+import logging
+import os
 
-from core.config import Settings
+logger = logging.getLogger(__name__)
 
+DAILY_BUDGET = float(os.getenv("DAILY_BUDGET_USD", 10000))
 
-def determine_position_size(
-    equity: float,
-    confidence: float,
-    price: float,
-    atr: float,
-    settings: Settings,
-) -> int:
-    """Calculate dynamic position size bounded by risk constraints."""
+def allocate_positions(selected):
+    if not selected:
+        logger.warning("No selected symbols to allocate capital")
+        return {}
 
-    if equity <= 0 or price <= 0:
-        return 0
+    per_asset = DAILY_BUDGET / len(selected)
 
-    normalized_confidence = max(settings.min_confidence, min(confidence, 1.0))
-    base_capital = equity * settings.max_position_pct
-    allocation = base_capital * normalized_confidence
+    logger.info(
+        f"Allocating ${per_asset:.2f} per asset "
+        f"across {len(selected)} positions"
+    )
 
-    atr = atr or price * 0.02
-    stop_distance = max(atr * settings.atr_multiplier, price * 0.01)
-    if stop_distance <= 0:
-        return 0
-
-    qty = int(allocation / stop_distance)
-    return max(qty, 0)
+    return {symbol: per_asset for symbol in selected}

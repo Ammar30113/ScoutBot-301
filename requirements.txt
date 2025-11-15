@@ -1,8 +1,7 @@
-alpaca-trade-api
-requests
 pandas
 numpy
-scikit-learn
+requests
+alpaca-py
 xgboost
-ta
+scikit-learn
 python-dotenv

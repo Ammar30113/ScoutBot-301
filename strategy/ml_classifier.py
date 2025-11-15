@@ -6,10 +6,12 @@ from typing import Dict, Iterable, List
 import joblib
 import numpy as np
 import pandas as pd
-from ta.volatility import AverageTrueRange
 from xgboost import XGBClassifier
 
 from core.logger import get_logger
+from data.price_router import PriceRouter
+from data.finnhub_sentiment import fetch_sentiment as fetch_finnhub_sentiment
+from data.newsapi_sentiment import fetch_sentiment as fetch_news_sentiment
 
 logger = get_logger(__name__)
 
@@ -27,6 +29,9 @@ FEATURE_COLUMNS = [
     "etf_relative_strength",
     "liquidity_bucket",
 ]
+
+
+price_router = PriceRouter()
 
 
 class MLClassifier:
@@ -98,9 +103,7 @@ def build_features(
             return 0.0
         return float(close.iloc[-1] / start - 1)
 
-    atr_series = AverageTrueRange(
-        high=price_frame["high"], low=price_frame["low"], close=close, window=14, fillna=True
-    ).average_true_range()
+    atr_series = _average_true_range(price_frame)
     atr_value = float(atr_series.iloc[-1]) if not atr_series.empty else 0.0
     atr_percent = atr_value / close.iloc[-1] if close.iloc[-1] else 0.0
 
@@ -140,3 +143,53 @@ def _bucketize_liquidity(avg_dollar_volume: float, liquidity_hint: float) -> flo
     else:
         bucket = 2
     return float(bucket + liquidity_hint)
+
+
+def _average_true_range(frame: pd.DataFrame, window: int = 14) -> pd.Series:
+    high = frame["high"].astype(float)
+    low = frame["low"].astype(float)
+    close = frame["close"].astype(float)
+    prev_close = close.shift(1).fillna(close)
+    tr = pd.concat(
+        [
+            (high - low).abs(),
+            (high - prev_close).abs(),
+            (low - prev_close).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+    return tr.rolling(window=window, min_periods=1).mean()
+
+
+_ml_classifier = MLClassifier()
+
+
+def generate_predictions(universe: Iterable[str]) -> List[tuple[str, float]]:
+    predictions: List[tuple[str, float]] = []
+    for symbol in universe:
+        try:
+            bars = price_router.get_aggregates(symbol, "1day", 120)
+        except Exception as exc:  # pragma: no cover - network guard
+            logger.warning("Aggregates unavailable for %s: %s", symbol, exc)
+            continue
+        price_frame = PriceRouter.aggregates_to_dataframe(bars)
+        if price_frame.empty:
+            logger.warning("No price data for %s", symbol)
+            continue
+
+        finnhub_score = fetch_finnhub_sentiment(symbol)
+        news_score = fetch_news_sentiment(symbol)
+        vol_series = price_frame.get("volume")
+        liquidity_hint = float(vol_series.iloc[-1]) / 1_000_000 if vol_series is not None and not vol_series.empty else 0.0
+
+        features = build_features(
+            price_frame=price_frame,
+            etf_frame=pd.DataFrame(),
+            finnhub_sentiment=finnhub_score,
+            newsapi_sentiment=news_score,
+            liquidity_hint=liquidity_hint,
+        )
+        score = _ml_classifier.predict(features)
+        predictions.append((symbol, score))
+        logger.info("ML score for %s → %.3f", symbol, score)
+    return predictions

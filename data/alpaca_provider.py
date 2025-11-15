@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Dict, List
 
 import requests
 
-from core.config import Settings
+from core.config import get_settings
 from core.logger import get_logger
 
 logger = get_logger(__name__)
@@ -14,7 +14,8 @@ logger = get_logger(__name__)
 class AlpacaProvider:
     """Market data provider backed by the Alpaca data API."""
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self) -> None:
+        settings = get_settings()
         self.base_url = settings.alpaca_data_url.rstrip("/")
         self.api_key = settings.alpaca_api_key
         self.api_secret = settings.alpaca_api_secret

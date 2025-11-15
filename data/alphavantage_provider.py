@@ -5,6 +5,7 @@ from typing import Dict, List
 
 import requests
 
+from core.config import get_settings
 from core.logger import get_logger
 
 logger = get_logger(__name__)
@@ -13,9 +14,10 @@ logger = get_logger(__name__)
 class AlphaVantageProvider:
     BASE_URL = "https://www.alphavantage.co/query"
 
-    def __init__(self, api_key: str) -> None:
-        self.api_key = api_key
-        if not api_key:
+    def __init__(self) -> None:
+        settings = get_settings()
+        self.api_key = settings.alphavantage_api_key
+        if not self.api_key:
             logger.warning("AlphaVantageProvider initialized without API key")
 
     def get_price(self, symbol: str) -> float:

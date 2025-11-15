@@ -4,25 +4,25 @@ from typing import Dict, List, Sequence
 
 import pandas as pd
 
-from core.config import get_settings
 from core.logger import get_logger
 from data.alpaca_provider import AlpacaProvider
 from data.alphavantage_provider import AlphaVantageProvider
 from data.twelvedata_provider import TwelveDataProvider
 
 logger = get_logger(__name__)
-settings = get_settings()
+
+PROVIDERS: Sequence[object] = [
+    AlpacaProvider(),
+    TwelveDataProvider(),
+    AlphaVantageProvider(),
+]
 
 
 class PriceRouter:
     """Funnel price + aggregate requests across multiple providers."""
 
     def __init__(self) -> None:
-        self.providers: Sequence[object] = (
-            AlpacaProvider(settings),
-            TwelveDataProvider(settings.twelvedata_api_key),
-            AlphaVantageProvider(settings.alphavantage_api_key),
-        )
+        self.providers = PROVIDERS
 
     def get_price(self, symbol: str) -> float:
         last_error: Exception | None = None

@@ -1,58 +1,67 @@
-from __future__ import annotations
+import logging
 
-from typing import Dict
-
-import alpaca_trade_api as tradeapi
+from alpaca.trading.client import TradingClient
+from alpaca.trading.enums import OrderClass, OrderSide, TimeInForce
+from alpaca.trading.requests import MarketOrderRequest, StopLossRequest, TakeProfitRequest
 
 from core.config import get_settings
-from core.logger import get_logger
-from trader import allocation, portfolio_state, risk_model
+from data.price_router import PriceRouter
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 settings = get_settings()
+price_router = PriceRouter()
+
+_trading_client = TradingClient(
+    settings.alpaca_api_key,
+    settings.alpaca_api_secret,
+    paper="paper" in settings.alpaca_base_url,
+)
 
 
-class OrderExecutor:
-    def __init__(self) -> None:
-        self.client = tradeapi.REST(settings.alpaca_api_key, settings.alpaca_api_secret, settings.alpaca_base_url)
-        self.state = portfolio_state.load_state(settings.portfolio_state_path, settings)
+def execute_trades(allocation):
+    if not allocation:
+        logger.info("No allocation provided; skipping trade execution")
+        return
 
-    def refresh_state(self) -> None:
-        self.state = portfolio_state.load_state(settings.portfolio_state_path, settings)
+    for symbol, capital in allocation.items():
+        try:
+            price = price_router.get_price(symbol)
+        except Exception as exc:  # pragma: no cover - network guard
+            logger.warning("Unable to fetch price for %s: %s", symbol, exc)
+            continue
 
-    def execute(self, decision: Dict[str, float | str]) -> None:
-        if decision.get("action") in {"HOLD", None}:
-            return
-        if not risk_model.can_enter_trade(self.state, settings):
-            logger.info("Risk guard blocked trade for %s", decision.get("symbol"))
-            return
+        if price <= 0:
+            logger.warning("Price unavailable for %s", symbol)
+            continue
 
-        symbol = str(decision["symbol"])
-        action = str(decision["action"])
-        price = float(decision.get("price") or decision.get("tp") or 0.0)
-        atr = float(decision.get("atr", 0.0))
-        qty = allocation.determine_position_size(self.state.get("equity", settings.initial_equity), decision.get("confidence", 0.0), price, atr, settings)
+        qty = int(capital // price)
         if qty <= 0:
-            logger.info("Qty zero for %s, skipping", symbol)
-            return
+            logger.info("Capital %.2f insufficient for %s; skipping", capital, symbol)
+            continue
 
-        side = "buy" if action == "BUY" else "sell"
-        take_profit = float(decision.get("tp", price))
-        stop_loss = float(decision.get("sl", price))
+        tp_price = round(price * 1.03, 2)
+        sl_price = round(price * 0.97, 2)
 
-        logger.info(
-            "Submitting %s order: %s qty=%s tp=%s sl=%s", side, symbol, qty, take_profit, stop_loss
-        )
-        order = self.client.submit_order(
+        order = MarketOrderRequest(
             symbol=symbol,
             qty=qty,
-            side=side,
-            type="market",
-            time_in_force="day",
-            order_class="bracket",
-            take_profit={"limit_price": round(take_profit, 2)},
-            stop_loss={"stop_price": round(stop_loss, 2)},
+            side=OrderSide.BUY,
+            time_in_force=TimeInForce.DAY,
+            order_class=OrderClass.BRACKET,
+            take_profit=TakeProfitRequest(limit_price=tp_price),
+            stop_loss=StopLossRequest(stop_price=sl_price),
         )
-        logger.info("Order accepted %s", order)
-        portfolio_state.record_trade(self.state, symbol, action, qty, price, float(decision.get("confidence", 0.0)))
-        portfolio_state.save_state(settings.portfolio_state_path, self.state)
+
+        try:
+            _trading_client.submit_order(order_data=order)
+        except Exception as exc:  # pragma: no cover - network guard
+            logger.warning("Alpaca order failed for %s: %s", symbol, exc)
+            continue
+
+        logger.info(
+            "Submitted bracket order for %s qty=%s tp=%s sl=%s",
+            symbol,
+            qty,
+            tp_price,
+            sl_price,
+        )
