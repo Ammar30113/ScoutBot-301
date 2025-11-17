@@ -6,62 +6,88 @@ from alpaca.trading.requests import MarketOrderRequest, StopLossRequest, TakePro
 
 from core.config import get_settings
 from data.price_router import PriceRouter
+from trader.risk_model import stop_loss_price, take_profit_price
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
 price_router = PriceRouter()
 
-_trading_client = TradingClient(
+trading_client = TradingClient(
     settings.alpaca_api_key,
     settings.alpaca_api_secret,
     paper="paper" in settings.alpaca_base_url,
 )
 
 
-def execute_trades(allocation):
-    if not allocation:
-        logger.info("No allocation provided; skipping trade execution")
+def execute_trades(allocations):
+    if not allocations:
+        logger.info("No allocations to trade")
         return
 
-    for symbol, capital in allocation.items():
+    try:
+        open_positions = {pos.symbol: pos for pos in trading_client.get_all_positions()}
+    except Exception as exc:  # pragma: no cover - network guard
+        logger.warning("Unable to fetch open positions: %s", exc)
+        open_positions = {}
+
+    try:
+        buying_power = float(trading_client.get_account().buying_power)
+    except Exception as exc:  # pragma: no cover - network guard
+        logger.warning("Unable to fetch buying power: %s", exc)
+        buying_power = 0.0
+
+    for symbol, shares in allocations.items():
+        if shares <= 0:
+            continue
+        if symbol in open_positions:
+            logger.info("Skipping %s; already in open positions", symbol)
+            continue
         try:
             price = price_router.get_price(symbol)
         except Exception as exc:  # pragma: no cover - network guard
-            logger.warning("Unable to fetch price for %s: %s", symbol, exc)
+            logger.warning("Price fetch failed for %s: %s", symbol, exc)
             continue
 
-        if price <= 0:
-            logger.warning("Price unavailable for %s", symbol)
+        notional = shares * price
+        if buying_power and notional > buying_power:
+            logger.warning(
+                "Insufficient buying power for %s: needed %.2f, available %.2f", symbol, notional, buying_power
+            )
             continue
 
-        qty = int(capital // price)
-        if qty <= 0:
-            logger.info("Capital %.2f insufficient for %s; skipping", capital, symbol)
-            continue
-
-        tp_price = round(price * 1.03, 2)
-        sl_price = round(price * 0.97, 2)
+        tp = take_profit_price(price)
+        sl = stop_loss_price(price)
 
         order = MarketOrderRequest(
             symbol=symbol,
-            qty=qty,
+            qty=shares,
             side=OrderSide.BUY,
             time_in_force=TimeInForce.DAY,
             order_class=OrderClass.BRACKET,
-            take_profit=TakeProfitRequest(limit_price=tp_price),
-            stop_loss=StopLossRequest(stop_price=sl_price),
+            take_profit=TakeProfitRequest(limit_price=tp),
+            stop_loss=StopLossRequest(stop_price=sl),
         )
-
         try:
-            _trading_client.submit_order(order_data=order)
+            trading_client.submit_order(order)
         except Exception as exc:  # pragma: no cover - network guard
-            logger.warning("Alpaca order failed for %s: %s", symbol, exc)
+            logger.warning("Order failed for %s: %s", symbol, exc)
             continue
+        logger.info("Submitted bracket order for %s shares=%s tp=%.2f sl=%.2f", symbol, shares, tp, sl)
+        if buying_power:
+            buying_power = max(0.0, buying_power - notional)
 
-        logger.info(
-            "Submitted bracket order for %s qty=%s tp=%s sl=%s",
-            symbol,
-            qty,
-            tp_price,
-            sl_price,
-        )
+
+def close_position(symbol: str) -> None:
+    try:
+        trading_client.close_position(symbol)
+        logger.info("Closed position for %s", symbol)
+    except Exception as exc:  # pragma: no cover - network guard
+        logger.warning("Failed to close position for %s: %s", symbol, exc)
+
+
+def list_positions():
+    try:
+        return trading_client.get_all_positions()
+    except Exception as exc:  # pragma: no cover - network guard
+        logger.warning("Unable to list positions: %s", exc)
+        return []
