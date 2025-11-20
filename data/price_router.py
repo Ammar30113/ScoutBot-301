@@ -12,9 +12,14 @@ from data.twelvedata_provider import TwelveDataProvider
 
 logger = get_logger(__name__)
 settings = get_settings()
+_providers_cache: Sequence[object] | None = None
 
 
 def _build_providers() -> Sequence[object]:
+    global _providers_cache
+    if _providers_cache is not None:
+        return _providers_cache
+
     providers: list[object] = []
     # Prefer non-Alpaca first to reduce rate-limit exposure
     if settings.alphavantage_api_key:
@@ -33,6 +38,7 @@ def _build_providers() -> Sequence[object]:
         logger.info("PriceRouter: Alpaca disabled (missing API credentials)")
 
     logger.info("PriceRouter active providers: %s", [p.__class__.__name__ for p in providers])
+    _providers_cache = providers
     return providers
 
 

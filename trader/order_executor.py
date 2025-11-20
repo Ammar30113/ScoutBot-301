@@ -102,19 +102,21 @@ def close_position(symbol: str) -> None:
         qty = float(pos.qty)
         held = float(getattr(pos, "held_for_orders", 0) or 0)
     except Exception:
-        qty = 0.0
-        held = 0.0
+        logger.info("Unable to parse quantities for %s; skipping close", symbol)
+        return
 
     if qty <= 0 or held >= qty:
-        logger.warning("Skipping exit for %s: qty=%s held_for_orders=%s", symbol, qty, held)
+        logger.info("No exit for %s: qty=%s held_for_orders=%s", symbol, qty, held)
         return
 
     try:
         trading_client.close_position(symbol)
         logger.info("Closed position for %s", symbol)
     except Exception as exc:  # pragma: no cover - network guard
-        if "insufficient qty" in str(exc).lower():
-            logger.warning("Skip exit for %s: qty unavailable.", symbol)
+        msg = str(exc).lower()
+        benign_markers = ("insufficient qty", "insufficient quantity", "no position", "position does not exist")
+        if any(marker in msg for marker in benign_markers):
+            logger.info("No exit executed for %s: position unavailable", symbol)
             return
         logger.warning("Failed to close position for %s: %s", symbol, exc)
 
