@@ -28,7 +28,7 @@ def route_signals(universe: List[str]) -> List[Dict[str, float | str]]:
         sentiment = sentiment_score(symbol)
 
         try:
-            bars = price_router.get_aggregates(symbol, "1day", 60)
+            bars = price_router.get_aggregates(symbol, window=120)
             df = PriceRouter.aggregates_to_dataframe(bars)
         except Exception as exc:  # pragma: no cover - network guard
             logger.warning("Technical data unavailable for %s: %s", symbol, exc)

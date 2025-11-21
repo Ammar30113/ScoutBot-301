@@ -51,7 +51,7 @@ class MLClassifier:
 
         for symbol in symbols:
             try:
-                bars = price_router.get_aggregates(symbol, "1day", 260)
+                bars = price_router.get_aggregates(symbol, window=260)
                 df = PriceRouter.aggregates_to_dataframe(bars)
             except Exception as exc:  # pragma: no cover - network guard
                 logger.warning("Training data unavailable for %s: %s", symbol, exc)
@@ -153,7 +153,7 @@ def generate_predictions(universe: Iterable[str]) -> List[Tuple[str, float, Dict
     predictions: List[Tuple[str, float, Dict[str, float]]] = []
     for symbol in universe:
         try:
-            bars = price_router.get_aggregates(symbol, "1day", 120)
+            bars = price_router.get_aggregates(symbol, window=120)
         except Exception as exc:  # pragma: no cover - network guard
             logger.warning("Aggregates unavailable for %s: %s", symbol, exc)
             continue

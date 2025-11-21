@@ -57,7 +57,7 @@ class AlpacaProvider:
             return []
 
     def _normalize_timespan(self, timespan: str) -> str:
-        mapping = {"1day": "1Day", "1hour": "1Hour", "1min": "1Min"}
+        mapping = {"1day": "1Day", "1hour": "1Hour", "1min": "1Min", "5min": "5Min"}
         return mapping.get(timespan.lower(), "1Day")
 
     def _normalize_bar(self, bar: Dict[str, float]) -> Dict[str, float]:
@@ -69,3 +69,8 @@ class AlpacaProvider:
             "volume": float(bar["v"]),
             "timestamp": datetime.fromisoformat(bar["t"].replace("Z", "+00:00")).timestamp(),
         }
+
+    def get_intraday_1m(self, symbol: str, limit: int = 60) -> List[Dict[str, float]]:
+        """Convenience wrapper for 1-minute bars."""
+
+        return self.get_aggregates(symbol, timespan="1min", limit=limit)

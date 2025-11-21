@@ -61,3 +61,38 @@ class AlphaVantageProvider:
             )
         normalized.sort(key=lambda row: row["timestamp"])
         return normalized
+
+    def get_intraday_5m(self, symbol: str, limit: int = 60) -> List[Dict[str, float]]:
+        """Fetch 5-minute intraday bars."""
+
+        if not self.api_key:
+            return []
+        params = {
+            "function": "TIME_SERIES_INTRADAY",
+            "symbol": symbol.upper(),
+            "interval": "5min",
+            "apikey": self.api_key,
+            "outputsize": "compact",
+        }
+        try:
+            response = requests.get(self.BASE_URL, params=params, timeout=10)
+            response.raise_for_status()
+            data = response.json().get("Time Series (5min)", {}) or {}
+        except Exception as exc:  # pragma: no cover - network guard
+            logger.warning("AlphaVantage intraday aggregates failed for %s: %s", symbol, exc)
+            return []
+
+        normalized: List[Dict[str, float]] = []
+        for date_str, values in list(data.items())[:limit]:
+            normalized.append(
+                {
+                    "open": float(values["1. open"]),
+                    "high": float(values["2. high"]),
+                    "low": float(values["3. low"]),
+                    "close": float(values["4. close"]),
+                    "volume": float(values.get("5. volume", 0.0)),
+                    "timestamp": datetime.fromisoformat(date_str).timestamp(),
+                }
+            )
+        normalized.sort(key=lambda row: row["timestamp"])
+        return normalized

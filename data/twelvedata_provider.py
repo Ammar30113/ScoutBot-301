@@ -68,6 +68,38 @@ class TwelveDataProvider:
             )
         return normalized
 
+    def get_intraday_1m(self, symbol: str, limit: int = 60) -> List[Dict[str, float]]:
+        """Fetch raw 1-minute bars."""
+
+        if not self.api_key:
+            return []
+        params = {
+            "symbol": symbol.upper(),
+            "interval": "1min",
+            "apikey": self.api_key,
+            "outputsize": limit,
+        }
+        try:
+            response = requests.get(f"{self.BASE_URL}/time_series", params=params, timeout=10)
+            response.raise_for_status()
+            values = response.json().get("values", []) or []
+        except Exception as exc:  # pragma: no cover - network guard
+            logger.warning("TwelveData intraday aggregates failed for %s: %s", symbol, exc)
+            return []
+        normalized: List[Dict[str, float]] = []
+        for row in reversed(values):  # API returns newest first
+            normalized.append(
+                {
+                    "open": float(row["open"]),
+                    "high": float(row["high"]),
+                    "low": float(row["low"]),
+                    "close": float(row["close"]),
+                    "volume": float(row.get("volume", 0.0)),
+                    "timestamp": datetime.fromisoformat(row["datetime"]).timestamp(),
+                }
+            )
+        return normalized
+
     def _normalize_timespan(self, timespan: str) -> str:
         mapping = {"1day": "1day", "1hour": "1h", "1min": "1min"}
         return mapping.get(timespan.lower(), "1day")
