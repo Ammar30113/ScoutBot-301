@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import List, Sequence, Tuple
+from typing import List, Optional, Sequence, Tuple
 
 import pandas as pd
 
@@ -13,7 +13,7 @@ router = PriceRouter()
 MOMENTUM_TOP_K = 10
 
 
-def compute_momentum_scores(symbols: Sequence[str], top_k: int = MOMENTUM_TOP_K) -> List[Tuple[str, float]]:
+def compute_momentum_scores(symbols: Sequence[str], top_k: Optional[int] = MOMENTUM_TOP_K) -> List[Tuple[str, float]]:
     scores: List[Tuple[str, float]] = []
     for symbol in symbols:
         try:
@@ -48,4 +48,6 @@ def compute_momentum_scores(symbols: Sequence[str], top_k: int = MOMENTUM_TOP_K)
         )
 
     scores = sorted(scores, key=lambda x: x[1], reverse=True)
-    return scores[: top_k or MOMENTUM_TOP_K]
+    if top_k and top_k > 0:
+        return scores[:top_k]
+    return scores

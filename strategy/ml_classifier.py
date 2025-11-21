@@ -13,6 +13,7 @@ from xgboost import XGBClassifier
 
 from core.logger import get_logger
 from data.price_router import PriceRouter
+from strategy.technicals import atr_bands, compute_atr
 
 logger = get_logger(__name__)
 
@@ -21,9 +22,12 @@ FEATURE_COLUMNS = [
     "rsi",
     "macd",
     "macd_sig",
+    "macd_hist",
     "vwap_diff",
     "slope",
     "vol_ratio",
+    "atr",
+    "atr_band_position",
 ]
 
 price_router = PriceRouter()
@@ -81,19 +85,30 @@ class MLClassifier:
             df["target"] = (df["ret1"] >= 0.001).astype(int)
 
             rsi = RSIIndicator(df["close"].astype(float), window=14).rsi()
-            macd_line = MACD(df["close"].astype(float)).macd()
-            macd_sig = MACD(df["close"].astype(float)).macd_signal()
+            macd_indicator = MACD(df["close"].astype(float))
+            macd_line = macd_indicator.macd()
+            macd_sig = macd_indicator.macd_signal()
+            macd_hist = macd_indicator.macd_diff()
             vwap = _compute_vwap(df)
+            atr = compute_atr(df, window=14)
+            mid, _, _, _ = atr_bands(df, multiplier=1.5, window=14)
 
             df["rsi"] = rsi
             df["macd"] = macd_line
             df["macd_sig"] = macd_sig
+            df["macd_hist"] = macd_hist
             df["vwap_diff"] = df["close"].astype(float) - vwap
             df["slope"] = df["close"].astype(float).diff().rolling(5).mean()
             df["vol_ratio"] = (
                 df["volume"].astype(float).rolling(5).mean() / df["volume"].astype(float).rolling(20).mean()
             )
+            df["atr"] = atr
+            if mid is not None and atr is not None:
+                df["atr_band_position"] = (df["close"].astype(float) - mid) / atr
+            else:
+                df["atr_band_position"] = 0.0
 
+            df.replace([np.inf, -np.inf], np.nan, inplace=True)
             df = df.dropna(subset=FEATURE_COLUMNS + ["target"])
             if not df.empty:
                 frames.append(df)
@@ -146,21 +161,31 @@ def build_features(price_frame: pd.DataFrame) -> Dict[str, float]:
     volume = df["volume"].astype(float)
 
     rsi_val = float(RSIIndicator(close, window=14).rsi().iloc[-1])
-    macd_line = MACD(close).macd().iloc[-1]
-    macd_sig = MACD(close).macd_signal().iloc[-1]
+    macd_indicator = MACD(close)
+    macd_line = macd_indicator.macd().iloc[-1]
+    macd_sig = macd_indicator.macd_signal().iloc[-1]
+    macd_hist = macd_indicator.macd_diff().iloc[-1]
     vwap_series = _compute_vwap(df)
     vwap = vwap_series.iloc[-1] if not vwap_series.empty else np.nan
     vwap = vwap if np.isfinite(vwap) else float(close.iloc[-1])
     slope = float(close.diff().rolling(5).mean().iloc[-1])
     vol_ratio = float((volume.rolling(5).mean() / volume.rolling(20).mean()).iloc[-1])
+    atr_series = compute_atr(df, window=14)
+    atr_val = float(atr_series.iloc[-1]) if len(atr_series) else 0.0
+    mid, _, _, _ = atr_bands(df, multiplier=1.5, window=14)
+    mid_val = float(mid.iloc[-1]) if mid is not None and len(mid) else float(close.iloc[-1])
+    atr_band_position = (float(close.iloc[-1]) - mid_val) / atr_val if atr_val else 0.0
 
     return {
         "rsi": rsi_val,
         "macd": float(macd_line),
         "macd_sig": float(macd_sig),
+        "macd_hist": float(macd_hist),
         "vwap_diff": float(close.iloc[-1] - vwap),
         "slope": slope,
         "vol_ratio": vol_ratio if np.isfinite(vol_ratio) else 0.0,
+        "atr": atr_val if np.isfinite(atr_val) else 0.0,
+        "atr_band_position": atr_band_position if np.isfinite(atr_band_position) else 0.0,
     }
 
 
