@@ -28,9 +28,11 @@ def passes_entry_filter(df: pd.DataFrame) -> bool:
     macd_signal = MACD(close).macd_signal().iloc[-1]
     vwap = compute_vwap(df).iloc[-1]
 
-    if not (45 < rsi < 70):
+    # Softer RSI band for intraday volatility
+    if not (40 < rsi < 75):
         return False
-    if not (macd > macd_signal):
+    # MACD only needs to be positive (trend filter)
+    if not (macd > 0):
         return False
     if close.iloc[-1] < vwap:
         return False

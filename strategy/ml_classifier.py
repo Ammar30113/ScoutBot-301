@@ -1,28 +1,29 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Dict, Iterable, List, Tuple
 
 import joblib
 import numpy as np
 import pandas as pd
+from ta.momentum import RSIIndicator
+from ta.trend import MACD
 from xgboost import XGBClassifier
 
 from core.logger import get_logger
 from data.price_router import PriceRouter
-from strategy.sentiment_engine import sentiment_score
 
 logger = get_logger(__name__)
 
 MODEL_PATH = Path("models/momentum_sentiment_model.pkl")
 FEATURE_COLUMNS = [
     "rsi",
-    "macd_hist",
-    "return_5d",
-    "return_20d",
-    "volume_delta",
-    "volatility_20d",
-    "sentiment_score",
+    "macd",
+    "macd_sig",
+    "vwap_diff",
+    "slope",
+    "vol_ratio",
 ]
 
 price_router = PriceRouter()
@@ -37,50 +38,87 @@ class MLClassifier:
         self.model_path.parent.mkdir(parents=True, exist_ok=True)
         if self.model_path.exists():
             try:
-                return joblib.load(self.model_path)
+                model = joblib.load(self.model_path)
+                if hasattr(model, "n_features_in_") and int(model.n_features_in_) != len(FEATURE_COLUMNS):
+                    raise ValueError("Stale model feature shape; retraining")
+                # sanity check predict_proba shape
+                _ = model.predict_proba(np.zeros((1, len(FEATURE_COLUMNS))))
+                logger.info("Loaded existing ML model successfully.")
+                return model
             except Exception as exc:  # pragma: no cover - defensive log
-                logger.warning("Existing ML model %s is unreadable (%s); retraining", self.model_path, exc)
+                logger.warning("Existing ML model %s invalid; retraining (%s)", self.model_path, exc)
+                try:
+                    os.remove(self.model_path)
+                except Exception:
+                    pass
         model = self._train_model()
         joblib.dump(model, self.model_path)
         return model
 
     def _train_model(self) -> XGBClassifier:
-        symbols = ["SPY", "QQQ", "IWM", "AAPL", "MSFT", "NVDA", "AMD", "AMZN", "META", "GOOG"]
-        X_rows: List[List[float]] = []
-        y_rows: List[int] = []
+        """
+        Real intraday ML training:
+        - pulls intraday 5-minute bars via price_router
+        - extracts features: momentum slope, volume expansion, RSI, MACD, VWAP diff
+        - target: next bar return >= +0.1%
+        """
+
+        symbols = ["AAPL", "NVDA", "MSFT", "TSLA", "AMZN", "META", "AMD", "QQQ", "SPY", "SMH"]
+        frames: List[pd.DataFrame] = []
 
         for symbol in symbols:
             try:
-                bars = price_router.get_aggregates(symbol, window=260)
+                bars = price_router.get_aggregates(symbol, window=600)
                 df = PriceRouter.aggregates_to_dataframe(bars)
             except Exception as exc:  # pragma: no cover - network guard
                 logger.warning("Training data unavailable for %s: %s", symbol, exc)
                 continue
-            if df.empty or len(df) < 40:
+            if df is None or df.empty or len(df) < 50:
                 continue
 
-            sent = sentiment_score(symbol)
-            closes = df["close"].astype(float)
-            for idx in range(20, min(len(df) - 1, 220)):
-                window = df.iloc[max(0, idx - 60) : idx + 1]
-                feats = build_features(window, sent)
-                next_close = float(closes.iloc[idx + 1])
-                curr_close = float(closes.iloc[idx])
-                label = 1 if next_close >= curr_close * 1.01 else 0
-                X_rows.append([feats[col] for col in FEATURE_COLUMNS])
-                y_rows.append(label)
-                if len(X_rows) >= 400:
-                    break
-            if len(X_rows) >= 400:
-                break
+            df = df.copy()
+            df["ret1"] = df["close"].pct_change().shift(-1)
+            df["target"] = (df["ret1"] >= 0.001).astype(int)
 
-        if len(X_rows) < 50:
+            rsi = RSIIndicator(df["close"].astype(float), window=14).rsi()
+            macd_line = MACD(df["close"].astype(float)).macd()
+            macd_sig = MACD(df["close"].astype(float)).macd_signal()
+            vwap = _compute_vwap(df)
+
+            df["rsi"] = rsi
+            df["macd"] = macd_line
+            df["macd_sig"] = macd_sig
+            df["vwap_diff"] = df["close"].astype(float) - vwap
+            df["slope"] = df["close"].astype(float).diff().rolling(5).mean()
+            df["vol_ratio"] = (
+                df["volume"].astype(float).rolling(5).mean() / df["volume"].astype(float).rolling(20).mean()
+            )
+
+            df = df.dropna(subset=FEATURE_COLUMNS + ["target"])
+            if not df.empty:
+                frames.append(df)
+
+        if not frames:
+            logger.warning("No intraday training data available; training fallback synthetic model.")
             rng = np.random.default_rng(42)
-            samples = 300
-            X_rows = rng.normal(size=(samples, len(FEATURE_COLUMNS))).tolist()
-            weights = np.array([0.2, 0.2, 0.2, 0.2, 0.1, 0.05, 0.15])
-            logits = (np.array(X_rows) @ weights) + rng.normal(scale=0.3, size=samples)
-            y_rows = (logits > 0).astype(int).tolist()
+            samples = 200
+            X = rng.normal(size=(samples, len(FEATURE_COLUMNS)))
+            y = (rng.random(size=samples) > 0.5).astype(int)
+
+            model = XGBClassifier(
+                n_estimators=50,
+                max_depth=3,
+                learning_rate=0.1,
+                subsample=0.8,
+                colsample_bytree=0.8,
+                eval_metric="logloss",
+            )
+            model.fit(X, y)
+            return model
+
+        full = pd.concat(frames, ignore_index=True)
+        X = full[FEATURE_COLUMNS]
+        y = full["target"]
 
         model = XGBClassifier(
             n_estimators=200,
@@ -90,7 +128,7 @@ class MLClassifier:
             colsample_bytree=0.8,
             eval_metric="logloss",
         )
-        model.fit(np.array(X_rows), np.array(y_rows))
+        model.fit(X, y)
         return model
 
     def predict(self, features: Dict[str, float]) -> float:
@@ -99,51 +137,39 @@ class MLClassifier:
         return float(np.clip(proba, 0.0, 1.0))
 
 
-def build_features(price_frame: pd.DataFrame, sent_score: float) -> Dict[str, float]:
+def build_features(price_frame: pd.DataFrame) -> Dict[str, float]:
     if price_frame.empty or len(price_frame) < 20:
         return {col: 0.0 for col in FEATURE_COLUMNS}
 
-    close = price_frame["close"].astype(float)
-    high = price_frame["high"].astype(float)
-    low = price_frame["low"].astype(float)
-    volume = price_frame["volume"].astype(float).replace(0, np.nan)
+    df = price_frame.copy()
+    close = df["close"].astype(float)
+    volume = df["volume"].astype(float)
 
-    rsi_val = _rsi(close)
-    macd_val = _macd_hist(close)
-    ret_5 = close.iloc[-1] / close.iloc[-6] - 1 if len(close) > 5 and close.iloc[-6] else 0.0
-    ret_20 = close.iloc[-1] / close.iloc[-21] - 1 if len(close) > 20 and close.iloc[-21] else 0.0
-    vol_delta = volume.iloc[-1] / volume.rolling(window=20, min_periods=1).mean().iloc[-1] if len(volume) else 0.0
-    volatility = float(close.pct_change().rolling(window=20, min_periods=1).std().iloc[-1])
+    rsi_val = float(RSIIndicator(close, window=14).rsi().iloc[-1])
+    macd_line = MACD(close).macd().iloc[-1]
+    macd_sig = MACD(close).macd_signal().iloc[-1]
+    vwap_series = _compute_vwap(df)
+    vwap = vwap_series.iloc[-1] if not vwap_series.empty else np.nan
+    vwap = vwap if np.isfinite(vwap) else float(close.iloc[-1])
+    slope = float(close.diff().rolling(5).mean().iloc[-1])
+    vol_ratio = float((volume.rolling(5).mean() / volume.rolling(20).mean()).iloc[-1])
 
     return {
         "rsi": rsi_val,
-        "macd_hist": macd_val,
-        "return_5d": ret_5,
-        "return_20d": ret_20,
-        "volume_delta": vol_delta,
-        "volatility_20d": volatility,
-        "sentiment_score": sent_score,
+        "macd": float(macd_line),
+        "macd_sig": float(macd_sig),
+        "vwap_diff": float(close.iloc[-1] - vwap),
+        "slope": slope,
+        "vol_ratio": vol_ratio if np.isfinite(vol_ratio) else 0.0,
     }
 
 
-def _rsi(close: pd.Series, window: int = 14) -> float:
-    delta = close.diff()
-    gain = delta.clip(lower=0).rolling(window=window, min_periods=window).mean()
-    loss = -delta.clip(upper=0).rolling(window=window, min_periods=window).mean()
-    if loss is None or loss.iloc[-1] == 0:
-        return 100.0
-    rs = gain / loss
-    rsi = 100 - (100 / (1 + rs))
-    return float(rsi.iloc[-1]) if not rsi.empty else 0.0
-
-
-def _macd_hist(close: pd.Series) -> float:
-    ema_fast = close.ewm(span=12, adjust=False).mean()
-    ema_slow = close.ewm(span=26, adjust=False).mean()
-    macd_val = ema_fast - ema_slow
-    signal = macd_val.ewm(span=9, adjust=False).mean()
-    hist = macd_val - signal
-    return float(hist.iloc[-1]) if not hist.empty else 0.0
+def _compute_vwap(df: pd.DataFrame) -> pd.Series:
+    price = df["close"].astype(float)
+    volume = df["volume"].astype(float)
+    cumulative_volume = volume.cumsum().replace(0, np.nan)
+    dollar_volume = (price * volume).cumsum()
+    return dollar_volume / cumulative_volume
 
 
 _ml_classifier = MLClassifier()
@@ -162,8 +188,7 @@ def generate_predictions(universe: Iterable[str]) -> List[Tuple[str, float, Dict
             logger.warning("No price data for %s", symbol)
             continue
 
-        sent_score = sentiment_score(symbol)
-        features = build_features(price_frame, sent_score)
+        features = build_features(price_frame)
         prob = _ml_classifier.predict(features)
         predictions.append((symbol, prob, features))
         logger.info("ML probability for %s → %.3f", symbol, prob)

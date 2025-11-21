@@ -24,7 +24,8 @@ def resample_to_5m(bars) -> pd.DataFrame:
     frame = frame.sort_values("timestamp").reset_index(drop=True)
     frame["timestamp"] = pd.to_datetime(frame["timestamp"], unit="s", errors="coerce", utc=True)
     frame = frame.dropna(subset=["timestamp"]).set_index("timestamp")
-    frame = frame.resample("5T").agg(
+    # Pandas FutureWarning fix: use '5min' instead of '5T'
+    frame = frame.resample("5min").agg(
         {
             "open": "first",
             "high": "max",

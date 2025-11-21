@@ -23,7 +23,8 @@ def route_signals(universe: List[str]) -> List[Dict[str, float | str]]:
 
     for symbol, prob, _ in ml_preds:
         rank_component = 1.0 - (list(momentum_map.keys()).index(symbol) / max_rank) if symbol in momentum_map else 0.0
-        if prob < 0.4:
+        # Lower ML threshold to allow valid intraday setups
+        if prob < 0.3:
             continue
         sentiment = sentiment_score(symbol)
 
