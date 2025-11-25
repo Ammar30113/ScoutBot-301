@@ -10,7 +10,7 @@ price_router = PriceRouter()
 def is_crash_mode() -> tuple[bool, float]:
     """
     Returns (crash_mode, drop_pct) based on SPY 5-minute bars.
-    Crash mode triggers when last 5-min bar drops >= 0.20%.
+    Crash mode triggers when last 5-min bar drops >= 1%.
     """
 
     try:
@@ -22,7 +22,7 @@ def is_crash_mode() -> tuple[bool, float]:
         if close_prev == 0:
             return False, 0.0
         drop = (close_last - close_prev) / close_prev
-        return drop <= -0.002, drop
+        return drop <= -0.01, drop
     except Exception as exc:  # pragma: no cover - defensive
         logger.warning("Crash detector unavailable: %s", exc)
         return False, 0.0

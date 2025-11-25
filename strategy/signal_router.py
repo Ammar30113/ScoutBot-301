@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import Dict, List
 
 from data.price_router import PriceRouter
@@ -21,8 +22,12 @@ def route_signals(universe: List[str], crash_mode: bool = False) -> List[Dict[st
     ml_preds = generate_predictions(universe, crash_mode=crash_mode)
     signals: List[Dict[str, float | str]] = []
     max_rank = max(len(momentum_map), 1)
+    rate_limited: set[str] = set()
 
     for symbol, prob, features in ml_preds:
+        if symbol in rate_limited:
+            continue
+        time.sleep(0.01)  # stagger provider requests slightly for large universes
         rank_component = 1.0 - (list(momentum_map.keys()).index(symbol) / max_rank) if symbol in momentum_map else 0.0
         ml_threshold_trend = 0.22
         ml_threshold_reversal = 0.28
@@ -34,7 +39,12 @@ def route_signals(universe: List[str], crash_mode: bool = False) -> List[Dict[st
             bars = price_router.get_aggregates(symbol, window=120)
             df = PriceRouter.aggregates_to_dataframe(bars)
         except Exception as exc:  # pragma: no cover - network guard
-            logger.warning("Technical data unavailable for %s: %s", symbol, exc)
+            msg = str(exc).lower()
+            if "429" in msg:
+                rate_limited.add(symbol)
+                logger.warning("Technical data rate-limited for %s (429); skipping", symbol)
+            else:
+                logger.warning("Technical data unavailable for %s: %s", symbol, exc)
             continue
         if df is None or df.empty:
             continue
