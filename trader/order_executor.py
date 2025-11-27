@@ -1,4 +1,5 @@
 import logging
+from datetime import datetime, timezone
 
 from alpaca.trading.client import TradingClient
 from alpaca.trading.enums import OrderClass, OrderSide, TimeInForce
@@ -41,7 +42,7 @@ def execute_trades(allocations, crash_mode: bool = False):
         buying_power = float(trading_client.get_account().buying_power)
     except Exception as exc:  # pragma: no cover - network guard
         logger.warning("Unable to fetch buying power: %s", exc)
-        buying_power = 0.0
+        buying_power = None
 
     for symbol, shares in allocations.items():
         if shares <= 0:
@@ -56,11 +57,14 @@ def execute_trades(allocations, crash_mode: bool = False):
             continue
 
         notional = shares * price
-        if buying_power and notional > buying_power:
-            logger.warning(
-                "Insufficient buying power for %s: needed %.2f, available %.2f", symbol, notional, buying_power
-            )
-            continue
+        # NEW robust protection
+        if buying_power is None or buying_power <= 0:
+            logger.warning("Buying power unavailable — skipping trade.")
+            return None
+
+        if notional > buying_power:
+            logger.warning("Trade rejected: required %.2f, available %.2f", notional, buying_power)
+            return None
 
         tp = take_profit_price(price, crash_mode=crash_mode)
         sl = stop_loss_price(price, crash_mode=crash_mode)
@@ -75,7 +79,13 @@ def execute_trades(allocations, crash_mode: bool = False):
             stop_loss=StopLossRequest(stop_price=sl),
         )
         try:
-            trading_client.submit_order(order)
+            submitted_order = trading_client.submit_order(order)
+            try:
+                if getattr(submitted_order, "status", "").lower() == "filled":
+                    # NEW: store real entry timestamp
+                    setattr(submitted_order, "entry_timestamp", datetime.now(timezone.utc).timestamp())
+            except Exception:
+                pass
         except Exception as exc:  # pragma: no cover - network guard
             logger.warning("Order failed for %s: %s", symbol, exc)
             continue

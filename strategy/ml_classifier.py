@@ -203,11 +203,19 @@ def _compute_vwap(df: pd.DataFrame) -> pd.Series:
     return dollar_volume / cumulative_volume
 
 
-_ml_classifier = MLClassifier()
+_ml_classifier: MLClassifier | None = None
+
+
+def get_classifier() -> MLClassifier:
+    global _ml_classifier
+    if _ml_classifier is None:
+        _ml_classifier = MLClassifier()
+    return _ml_classifier
 
 
 def generate_predictions(universe: Iterable[str], crash_mode: bool = False) -> List[Tuple[str, float, Dict[str, float]]]:
     predictions: List[Tuple[str, float, Dict[str, float]]] = []
+    classifier = get_classifier()
     for symbol in universe:
         try:
             bars = price_router.get_aggregates(symbol, window=120)
@@ -222,7 +230,7 @@ def generate_predictions(universe: Iterable[str], crash_mode: bool = False) -> L
         features = build_features(price_frame)
         if crash_mode:
             features = {k: (0.0 if v is None or not np.isfinite(v) else v) for k, v in features.items()}
-        prob = _ml_classifier.predict(features, crash_mode=crash_mode)
+        prob = classifier.predict(features, crash_mode=crash_mode)
         predictions.append((symbol, prob, features))
         logger.info("ML probability for %s → %.3f", symbol, prob)
     return predictions

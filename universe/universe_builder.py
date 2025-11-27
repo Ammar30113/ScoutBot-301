@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from core.config import get_settings
 from core.logger import get_logger
 from universe.csv_loader import load_universe_from_csv
@@ -12,7 +14,8 @@ DEFAULT_ETFS = ["SPY", "QQQ", "IWM"]
 
 
 def _filter_symbols(symbols: list[str]) -> list[str]:
-    return [sym for sym in symbols if sym.isalnum()]
+    pattern = re.compile(r"^[A-Z0-9\.\-]+$")
+    return [sym for sym in symbols if isinstance(sym, str) and pattern.match(sym.upper())]
 
 
 def _csv_universe(path) -> list[str]:
