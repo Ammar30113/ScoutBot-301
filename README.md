@@ -33,8 +33,10 @@ Set the following variables inside Railway (or a local `.env` file – the proje
 | `ALPACA_API_DATA_URL` | Default `https://data.alpaca.markets/v2` |
 | `TWELVEDATA_API_KEY` | Optional fallback data |
 | `ALPHAVANTAGE_API_KEY` | Optional fallback data |
-| `FINNHUB_API_KEY` | Sentiment + news scores |
-| `NEWSAPI_KEY` | Headline sentiment |
+| `MARKETAX_API_KEY` / `MARKETAUX_API_KEY` | Primary news sentiment source (Marketaux) |
+| `FINAGE_API_KEY` / `MOON_API_KEY` | Secondary news sentiment source |
+| `USE_SENTIMENT` | Toggle sentiment system (default `true`) |
+| `SENTIMENT_CACHE_TTL` | Sentiment cache TTL seconds (default `300`) |
 | `MICROCAP_ETFS` | Comma-separated ETF tickers (default `IWM,IWC,SMLF,VTWO,URTY`) |
 | `INITIAL_EQUITY` | Portfolio equity baseline (default 100000) |
 | `MAX_POSITION_PCT` | Position cap per trade (default 0.10) |

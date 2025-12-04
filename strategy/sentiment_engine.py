@@ -2,17 +2,16 @@ from __future__ import annotations
 
 import logging
 
-from data.finnhub_sentiment import fetch_sentiment as fetch_finnhub_sentiment
-from data.newsapi_sentiment import fetch_sentiment as fetch_news_sentiment
+from sentiment.engine import SentimentEngine
 
 logger = logging.getLogger(__name__)
+_engine = SentimentEngine()
 
 
 def sentiment_score(symbol: str) -> float:
-    fn_score = fetch_finnhub_sentiment(symbol)
-    news_score = fetch_news_sentiment(symbol)
-    weighted = 0.6 * news_score + 0.4 * fn_score
-    return max(0.0, min(1.0, float(weighted)))
+    payload = _engine.get_sentiment(symbol)
+    raw = float(payload.get("sentiment_score", 0.0) or 0.0)
+    return (raw + 1.0) / 2.0
 
 
 def passes_entry(symbol: str) -> bool:

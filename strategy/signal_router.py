@@ -5,17 +5,21 @@ import time
 from typing import Dict, List
 
 from data.price_router import PriceRouter
+from sentiment.engine import SentimentEngine
 from strategy.momentum import compute_momentum_scores
 from strategy.technicals import passes_entry_filter, compute_atr
-from strategy.sentiment_engine import sentiment_score
 from strategy.ml_classifier import generate_predictions
 from strategy.reversal import compute_reversal_signal
 
 logger = logging.getLogger(__name__)
 price_router = PriceRouter()
+sentiment_engine = SentimentEngine()
 
 
 def route_signals(universe: List[str], crash_mode: bool = False) -> List[Dict[str, float | str]]:
+    if len(universe) > 20:
+        sentiment_engine.preload(universe)
+
     momentum = compute_momentum_scores(universe, top_k=0, crash_mode=crash_mode)
     momentum_map = {sym: score for sym, score in momentum}
 
@@ -33,7 +37,9 @@ def route_signals(universe: List[str], crash_mode: bool = False) -> List[Dict[st
         ml_threshold_reversal = 0.28
         if prob < ml_threshold_trend:
             continue
-        sentiment = sentiment_score(symbol)
+        sentiment_payload = sentiment_engine.get_sentiment(symbol)
+        sentiment_raw = float(sentiment_payload.get("sentiment_score", 0.0) or 0.0)
+        sentiment = (sentiment_raw + 1.0) / 2.0  # map [-1,1] to [0,1]
 
         try:
             bars = price_router.get_aggregates(symbol, window=120)
@@ -81,7 +87,8 @@ def route_signals(universe: List[str], crash_mode: bool = False) -> List[Dict[st
             and mid_slope > -0.005
         )
         score_threshold = 0.32
-        final_score = 0.4 * rank_component + 0.2 * 1.0 + 0.2 * sentiment + 0.2 * prob
+        # Sentiment contributes ~15% of the final score (within 10-25% envelope)
+        final_score = 0.45 * rank_component + 0.25 * prob + 0.15 * sentiment + 0.15 * momentum_score
         momentum_signal = momentum_base and final_score > score_threshold
 
         dip_buy_ok = short_slope < -0.20 and vol_ratio > 1.1 and prob > ml_threshold_reversal
