@@ -13,7 +13,7 @@ This repository contains a from-scratch rewrite of the Microcap Scout Bot. The n
 ```
 microcap-scout-bot/
 ├── core/                # configuration, logging, scheduler utilities
-├── data/                # market-data providers + sentiment clients + price router
+├── data/                # market-data providers + price router
 ├── universe/            # ETF expansion, CSV fallback, and microcap filtering
 ├── strategy/            # ML classifier + trading strategies + signal router
 ├── trader/              # allocation, risk, order execution, and portfolio state
