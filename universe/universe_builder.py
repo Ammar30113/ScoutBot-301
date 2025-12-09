@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
 from typing import List, Optional
 
 import pandas as pd
@@ -21,9 +22,9 @@ _alpha = AlphaVantageProvider() if settings.alphavantage_api_key else None
 _twelve = TwelveDataProvider() if settings.twelvedata_api_key else None
 
 CANDIDATE_FILES = [
-    "universe/sp1500.csv",
-    "universe/russell3000.csv",
-    "universe/fallback_universe.csv",
+    Path("universe/sp1500.csv"),
+    Path("universe/russell3000.csv"),
+    settings.universe_fallback_csv,
 ]
 
 
@@ -33,7 +34,8 @@ def _filter_symbols(symbols: list[str]) -> list[str]:
 
 
 def _csv_universe(path) -> list[str]:
-    df = load_universe_from_csv(path)
+    csv_path = path if isinstance(path, Path) else Path(path)
+    df = load_universe_from_csv(csv_path)
     return _filter_symbols(df["symbol"].dropna().astype(str).str.upper().tolist())
 
 
