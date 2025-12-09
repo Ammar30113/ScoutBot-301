@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 import pandas as pd
 
@@ -60,64 +60,92 @@ def _get_market_cap(symbol: str) -> Optional[float]:
             continue
         if value:
             return float(value)
-    logger.warning("Market cap unavailable for %s; skipping", symbol)
+    logger.warning("Market cap unavailable for %s; using partial fundamentals", symbol)
     return None
 
 
-def _load_daily_frame(symbol: str, limit: int = 60) -> Optional[pd.DataFrame]:
+def _load_daily_frame(symbol: str, limit: int = 60, preloaded: Optional[List[Dict[str, float]]] = None) -> Optional[pd.DataFrame]:
     try:
-        bars = price_router.get_daily_aggregates(symbol, limit=limit)
+        bars = preloaded if preloaded is not None else price_router.get_daily_aggregates(symbol, limit=limit)
         frame = PriceRouter.aggregates_to_dataframe(bars)
         if frame.empty:
-            logger.warning("Universe skip %s: no daily bars", symbol)
+            logger.warning("Universe skip %s: no daily bars (skip_volume_history)", symbol)
             return None
         return frame
     except Exception as exc:  # pragma: no cover - network guard
-        logger.warning("Universe skip %s: price data unavailable (%s)", symbol, exc)
+        logger.warning("Universe skip %s: price data unavailable (skip_volume_history) (%s)", symbol, exc)
         return None
+
+
+def _log_skip(symbol: str, reason: str, detail: str = "") -> None:
+    message = f"Universe skip {symbol}: {reason}"
+    if detail:
+        message = f"{message} ({detail})"
+    logger.info(message)
 
 
 def _passes_filters(symbol: str, frame: pd.DataFrame) -> Optional[dict]:
-    recent = frame.tail(10).copy()
-    if len(recent) < 10:
-        logger.info("Universe skip %s: insufficient volume history", symbol)
+    lookback = max(settings.min_volume_history_days, 3)
+    recent = frame.tail(max(lookback, 15)).copy()
+    if recent.empty or len(recent.dropna(subset=["volume"])) < settings.min_volume_history_days:
+        _log_skip(symbol, "skip_volume_history", f"found {len(recent.dropna(subset=['volume']))} valid days")
         return None
     recent["dollar_volume"] = recent["close"].astype(float) * recent["volume"].astype(float)
-    avg_dollar_vol = float(recent["dollar_volume"].mean())
+    recent_valid = recent.dropna(subset=["dollar_volume"])
+    recent_valid = recent_valid[recent_valid["volume"].astype(float) > 0]
+    if len(recent_valid) < settings.min_volume_history_days:
+        _log_skip(symbol, "skip_volume_history", f"found {len(recent_valid)} valid days")
+        return None
+    avg_dollar_vol = float(recent_valid.tail(settings.min_volume_history_days)["dollar_volume"].mean())
     if avg_dollar_vol < settings.min_dollar_volume:
-        logger.info("Universe skip %s: avg dollar volume %.2f < threshold %.2f", symbol, avg_dollar_vol, settings.min_dollar_volume)
+        _log_skip(
+            symbol,
+            "skip_volume_history",
+            f"avg dollar vol {avg_dollar_vol:.2f} < threshold {settings.min_dollar_volume:.2f}",
+        )
         return None
 
     price = float(frame["close"].astype(float).iloc[-1])
     if not (settings.min_price <= price <= settings.max_price):
-        logger.info("Universe skip %s: price %.2f outside [%.2f, %.2f]", symbol, price, settings.min_price, settings.max_price)
-        return None
-
-    if len(frame) < 15:
-        logger.info("Universe skip %s: insufficient bars for ATR", symbol)
-        return None
-    atr_series = compute_atr(frame, window=14)
-    atr_val = float(atr_series.iloc[-1]) if len(atr_series) else 0.0
-    if atr_val <= 0 or price <= 0:
-        logger.info("Universe skip %s: invalid ATR/price", symbol)
-        return None
-    atr_pct = atr_val / price
-    if not (0.02 <= atr_pct <= 0.12):
-        logger.info("Universe skip %s: ATR%% %.4f outside range [0.02, 0.12]", symbol, atr_pct)
-        return None
-
-    market_cap = _get_market_cap(symbol)
-    if market_cap is None:
-        return None
-    if not (settings.min_mkt_cap <= market_cap <= settings.max_mkt_cap):
-        logger.info(
-            "Universe skip %s: market cap %.0f outside [%.0f, %.0f]",
+        _log_skip(
             symbol,
-            market_cap,
-            settings.min_mkt_cap,
-            settings.max_mkt_cap,
+            "skip_price_range",
+            f"price {price:.2f} outside [{settings.min_price:.2f}, {settings.max_price:.2f}]",
         )
         return None
+
+    atr_pct = None
+    atr_ready = len(frame) >= 15
+    if atr_ready:
+        atr_series = compute_atr(frame, window=14)
+        atr_val = float(atr_series.iloc[-1]) if len(atr_series) else 0.0
+        if atr_val > 0 and price > 0:
+            atr_pct = atr_val / price
+    if atr_pct is None:
+        if settings.allow_partial_atr:
+            _log_skip(symbol, "skip_atr", "missing ATR data")
+        else:
+            _log_skip(symbol, "skip_atr", "insufficient ATR data")
+            return None
+    else:
+        if not (0.02 <= atr_pct <= 0.12):
+            _log_skip(symbol, "skip_atr", f"ATR% {atr_pct:.4f} outside range [0.02, 0.12]")
+            return None
+
+    market_cap = _get_market_cap(symbol)
+    if market_cap is None or market_cap <= 0:
+        if settings.allow_partial_fundamentals:
+            _log_skip(symbol, "skip_missing_fundamentals", "market cap unavailable")
+        else:
+            return None
+    else:
+        if not (settings.min_mkt_cap <= market_cap <= settings.max_mkt_cap):
+            _log_skip(
+                symbol,
+                "skip_market_cap",
+                f"market cap {market_cap:.0f} outside [{settings.min_mkt_cap:.0f}, {settings.max_mkt_cap:.0f}]",
+            )
+            return None
 
     return {"symbol": symbol, "liquidity": avg_dollar_vol}
 
@@ -127,10 +155,13 @@ def get_universe() -> list[str]:
 
     candidates = _filter_symbols(_load_candidates())
     total_candidates = len(candidates)
+    logger.info("Universe: fetched %s candidates", total_candidates)
     passed: List[dict] = []
 
+    daily_bars_map = price_router.get_daily_bars_batch(candidates, limit=60) if candidates else {}
     for symbol in candidates:
-        frame = _load_daily_frame(symbol)
+        preloaded = daily_bars_map.get(symbol) if daily_bars_map else None
+        frame = _load_daily_frame(symbol, preloaded=preloaded)
         if frame is None:
             continue
         result = _passes_filters(symbol, frame)
@@ -141,11 +172,10 @@ def get_universe() -> list[str]:
     final_symbols = [entry["symbol"] for entry in passed[: settings.max_universe_size]]
 
     logger.info(
-        "Universe: fetched %s candidates, %s passed filters, %s final symbols",
-        total_candidates,
+        "%s passed initial data validation",
         len(passed),
-        len(final_symbols),
     )
+    logger.info("%s final universe symbols", len(final_symbols))
 
     if not final_symbols:
         fallback = _csv_universe(settings.universe_fallback_csv)

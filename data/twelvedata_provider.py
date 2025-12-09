@@ -7,6 +7,7 @@ import requests
 
 from core.config import get_settings
 from core.logger import get_logger
+from core.cache import get_cache
 
 logger = get_logger(__name__)
 
@@ -19,27 +20,40 @@ class TwelveDataProvider:
     def __init__(self) -> None:
         settings = get_settings()
         self.api_key = settings.twelvedata_api_key
+        self.cache = get_cache()
+        self.ttl = settings.cache_ttl
         if not self.api_key:
             logger.warning("TwelveDataProvider initialized without API key")
 
     def get_price(self, symbol: str) -> Optional[float]:
+        cache_key = f"td:price:{symbol.upper()}"
+        cached = self.cache.get(cache_key)
         if not self.api_key:
-            return None
+            return cached
         params = {"symbol": symbol.upper(), "apikey": self.api_key, "interval": "1min", "outputsize": 1}
         try:
             response = requests.get(f"{self.BASE_URL}/time_series", params=params, timeout=10)
+            if response.status_code == 429:
+                logger.warning("TwelveData price rate-limited for %s", symbol)
+                return cached
             response.raise_for_status()
             values = response.json().get("values", [])
             if not values:
+                if cached is not None:
+                    return cached
                 return None
-            return float(values[0].get("close", 0.0))
+            price = float(values[0].get("close", 0.0))
+            self.cache.set(cache_key, price, self.ttl)
+            return price
         except Exception as exc:  # pragma: no cover - network guard
             logger.warning("TwelveData price fetch failed for %s: %s", symbol, exc)
-            return None
+            return cached
 
     def get_aggregates(self, symbol: str, timespan: str = "1day", limit: int = 60) -> List[Dict[str, float]]:
+        cache_key = f"td:{timespan}:{symbol.upper()}"
+        cached = self.cache.get(cache_key) or []
         if not self.api_key:
-            return []
+            return cached
         interval = self._normalize_timespan(timespan)
         params = {
             "symbol": symbol.upper(),
@@ -49,11 +63,17 @@ class TwelveDataProvider:
         }
         try:
             response = requests.get(f"{self.BASE_URL}/time_series", params=params, timeout=10)
+            if response.status_code == 429:
+                logger.warning("TwelveData aggregates rate-limited for %s", symbol)
+                return cached
             response.raise_for_status()
             values = response.json().get("values", []) or []
+            if not values:
+                logger.warning("TwelveData aggregates empty for %s", symbol)
+                return cached
         except Exception as exc:  # pragma: no cover - network guard
             logger.warning("TwelveData aggregates failed for %s: %s", symbol, exc)
-            return []
+            return cached
         normalized: List[Dict[str, float]] = []
         for row in reversed(values):  # API returns newest first
             normalized.append(
@@ -66,13 +86,17 @@ class TwelveDataProvider:
                     "timestamp": datetime.fromisoformat(row["datetime"]).timestamp(),
                 }
             )
+        if normalized:
+            self.cache.set(cache_key, normalized, self.ttl)
         return normalized
 
     def get_intraday_1m(self, symbol: str, limit: int = 60) -> List[Dict[str, float]]:
         """Fetch raw 1-minute bars."""
 
+        cache_key = f"td:intraday1m:{symbol.upper()}"
+        cached = self.cache.get(cache_key) or []
         if not self.api_key:
-            return []
+            return cached
         params = {
             "symbol": symbol.upper(),
             "interval": "1min",
@@ -81,11 +105,17 @@ class TwelveDataProvider:
         }
         try:
             response = requests.get(f"{self.BASE_URL}/time_series", params=params, timeout=10)
+            if response.status_code == 429:
+                logger.warning("TwelveData intraday rate-limited for %s", symbol)
+                return cached
             response.raise_for_status()
             values = response.json().get("values", []) or []
+            if not values:
+                logger.warning("TwelveData intraday aggregates empty for %s", symbol)
+                return cached
         except Exception as exc:  # pragma: no cover - network guard
             logger.warning("TwelveData intraday aggregates failed for %s: %s", symbol, exc)
-            return []
+            return cached
         normalized: List[Dict[str, float]] = []
         for row in reversed(values):  # API returns newest first
             normalized.append(
@@ -98,6 +128,8 @@ class TwelveDataProvider:
                     "timestamp": datetime.fromisoformat(row["datetime"]).timestamp(),
                 }
             )
+        if normalized:
+            self.cache.set(cache_key, normalized, self.ttl)
         return normalized
 
     def _normalize_timespan(self, timespan: str) -> str:
@@ -107,17 +139,76 @@ class TwelveDataProvider:
     def get_market_cap(self, symbol: str) -> Optional[float]:
         """Fetch market cap via TwelveData profile endpoint."""
 
+        cache_key = f"td:market_cap:{symbol.upper()}"
+        cached = self.cache.get(cache_key)
         if not self.api_key:
-            return None
+            return cached if cached is not None else 0.0
         params = {"symbol": symbol.upper(), "apikey": self.api_key}
         try:
             response = requests.get(f"{self.BASE_URL}/profile", params=params, timeout=10)
+            if response.status_code == 429:
+                logger.warning("TwelveData market cap rate-limited for %s", symbol)
+                return cached if cached is not None else 0.0
             response.raise_for_status()
             data = response.json() or {}
             raw_cap = data.get("market_cap") or data.get("market_capitalization")
             if raw_cap is None:
-                return None
-            return float(raw_cap)
+                if cached is not None:
+                    return cached
+                return 0.0
+            value = float(raw_cap)
+            self.cache.set(cache_key, value, self.ttl)
+            return value
         except Exception as exc:  # pragma: no cover - network guard
             logger.warning("TwelveData market cap fetch failed for %s: %s", symbol, exc)
-            return None
+            return cached if cached is not None else 0.0
+
+    def get_daily_bars_multi(self, symbols: List[str], limit: int = 60) -> Dict[str, List[Dict[str, float]]]:
+        """
+        Fetch daily bars for multiple symbols using TwelveData multi-symbol API.
+        Returns mapping of symbol -> list of bars.
+        """
+
+        results: Dict[str, List[Dict[str, float]]] = {}
+        if not self.api_key or not symbols:
+            return results
+        joined = ",".join(sorted(set(sym.upper() for sym in symbols)))
+        params = {"symbol": joined, "interval": "1day", "apikey": self.api_key, "outputsize": limit}
+        try:
+            response = requests.get(f"{self.BASE_URL}/time_series", params=params, timeout=10)
+            if response.status_code == 429:
+                logger.warning("TwelveData batch daily bars rate-limited for %s symbols", len(symbols))
+                return results
+            response.raise_for_status()
+            data = response.json() or {}
+        except Exception as exc:  # pragma: no cover - network guard
+            logger.warning("TwelveData batch daily bars failed: %s", exc)
+            return results
+
+        # TwelveData multi response is a dict keyed by symbol
+        if not isinstance(data, dict):
+            return results
+        for sym, payload in data.items():
+            values = payload.get("values") if isinstance(payload, dict) else None
+            if not values:
+                continue
+            bars: List[Dict[str, float]] = []
+            for row in reversed(values):
+                try:
+                    bars.append(
+                        {
+                            "open": float(row["open"]),
+                            "high": float(row["high"]),
+                            "low": float(row["low"]),
+                            "close": float(row["close"]),
+                            "volume": float(row.get("volume", 0.0)),
+                            "timestamp": datetime.fromisoformat(row["datetime"]).timestamp(),
+                        }
+                    )
+                except Exception:
+                    continue
+            if bars:
+                sym_u = sym.upper()
+                results[sym_u] = bars
+                self.cache.set(f"td:1day:{sym_u}", bars, self.ttl)
+        return results

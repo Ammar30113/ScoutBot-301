@@ -45,6 +45,12 @@ class Settings:
     min_price: float = field(default_factory=lambda: float(os.getenv("MIN_PRICE", 2.0)))
     max_price: float = field(default_factory=lambda: float(os.getenv("MAX_PRICE", 80.0)))
     max_universe_size: int = field(default_factory=lambda: int(os.getenv("MAX_UNIVERSE_SIZE", 50)))
+    cache_ttl: int = field(default_factory=lambda: int(os.getenv("CACHE_TTL", "900")))
+    min_volume_history_days: int = field(default_factory=lambda: int(os.getenv("MIN_VOLUME_HISTORY_DAYS", "3")))
+    allow_partial_fundamentals: bool = field(
+        default_factory=lambda: str(os.getenv("ALLOW_PARTIAL_FUNDAMENTALS", "true")).lower() != "false"
+    )
+    allow_partial_atr: bool = field(default_factory=lambda: str(os.getenv("ALLOW_PARTIAL_ATR", "true")).lower() != "false")
 
     scheduler_interval_seconds: int = field(default_factory=lambda: int(os.getenv("SCHEDULER_INTERVAL_SECONDS", "900")))
     max_positions: int = field(default_factory=lambda: int(os.getenv("MAX_POSITIONS", "10")))

@@ -9,9 +9,11 @@ from core.logger import get_logger
 from data.alpaca_provider import AlpacaProvider
 from data.alphavantage_provider import AlphaVantageProvider
 from data.twelvedata_provider import TwelveDataProvider
+from core.cache import get_cache
 
 logger = get_logger(__name__)
 settings = get_settings()
+cache = get_cache()
 _providers_cache: Sequence[object] | None = None
 
 
@@ -71,6 +73,21 @@ class PriceRouter:
     def __init__(self) -> None:
         self.providers = _build_providers()
 
+    @staticmethod
+    def _merge_records(cached: List[Dict[str, float]], fresh: List[Dict[str, float]], limit: int) -> List[Dict[str, float]]:
+        """Merge cached + fresh bars by timestamp."""
+
+        combined = {float(item["timestamp"]): item for item in cached or [] if "timestamp" in item}
+        for item in fresh or []:
+            ts = float(item.get("timestamp", 0))
+            if ts:
+                combined[ts] = item
+        merged = list(combined.values())
+        merged.sort(key=lambda x: x["timestamp"])
+        if limit and len(merged) > limit:
+            merged = merged[-limit:]
+        return merged
+
     def get_price(self, symbol: str) -> float:
         last_error: Exception | None = None
         for provider in self.providers:
@@ -125,6 +142,10 @@ class PriceRouter:
         """
 
         last_error: Exception | None = None
+        limit = max(limit, 5)
+        cache_key = f"daily_bars:{symbol.upper()}"
+        cached_bars = cache.get(cache_key) or []
+        combined: List[Dict[str, float]] = []
         for provider in self.providers:
             provider_name = provider.__class__.__name__
             try:
@@ -133,12 +154,57 @@ class PriceRouter:
                 else:
                     continue
                 frame = self.aggregates_to_dataframe(bars)
-                if not frame.empty:
-                    return frame.to_dict("records")
+                if frame.empty:
+                    continue
+                records = frame.to_dict("records")
+                combined = self._merge_records(cached_bars, records, limit)
+                if combined:
+                    cache.set(cache_key, combined, settings.cache_ttl)
+                    return combined
             except Exception as exc:  # pragma: no cover - network guard
                 logger.warning("%s daily aggregates failed for %s: %s", provider_name, symbol, exc)
                 last_error = exc
-        raise RuntimeError(f"All providers failed to return daily aggregates for {symbol}") from last_error
+        if cached_bars:
+            return cached_bars
+        if combined:
+            return combined
+        if last_error:
+            logger.warning("Daily aggregates unavailable for %s; returning empty set: %s", symbol, last_error)
+        return []
+
+    def get_daily_bars_batch(self, symbols: Sequence[str], limit: int = 60) -> Dict[str, List[Dict[str, float]]]:
+        """Batch-fetch daily bars; use provider multi endpoints when available."""
+
+        limit = max(limit, 5)
+        results: Dict[str, List[Dict[str, float]]] = {}
+        remaining = []
+        for sym in symbols:
+            cache_key = f"daily_bars:{sym.upper()}"
+            cached = cache.get(cache_key)
+            if cached:
+                results[sym] = cached
+            else:
+                remaining.append(sym)
+
+        if remaining:
+            for provider in self.providers:
+                if hasattr(provider, "get_daily_bars_multi"):
+                    provider_name = provider.__class__.__name__
+                    try:
+                        batch = provider.get_daily_bars_multi(remaining, limit=limit)  # type: ignore[attr-defined]
+                        for sym, bars in batch.items():
+                            merged = self._merge_records(cache.get(f"daily_bars:{sym}") or [], bars, limit)
+                            cache.set(f"daily_bars:{sym}", merged, settings.cache_ttl)
+                            results[sym] = merged
+                    except Exception as exc:  # pragma: no cover - network guard
+                        logger.warning("%s batch daily bars failed: %s", provider_name, exc)
+                # no else; fall back to per-symbol below
+
+        for sym in symbols:
+            if sym in results:
+                continue
+            results[sym] = self.get_daily_aggregates(sym, limit=limit)
+        return results
 
     @staticmethod
     def aggregates_to_dataframe(bars: List[Dict[str, float]]) -> pd.DataFrame:
