@@ -19,6 +19,8 @@ class GPTProvider:
 
     def __init__(self) -> None:
         self.api_key = settings.openai_api_key
+        self.model = settings.openai_model
+        self.fallback_model = "gpt-3.5-turbo-0125"
         self.enabled = bool(self.api_key) and OpenAI is not None
         self._warned_missing = False
         self.client = OpenAI(api_key=self.api_key) if self.enabled else None
@@ -41,6 +43,10 @@ class GPTProvider:
         if not self._ensure_available():
             return {"symbol": symbol_u, "sentiment_score": 0.0, "source": "gpt"}
 
+        model_to_use = self.model or self.fallback_model
+        if model_to_use.lower() == "gpt-4o-mini" and not self.fallback_model:
+            model_to_use = "gpt-3.5-turbo-0125"
+
         prompt = (
             "You are a trading assistant. Return a single sentiment score between -1 (very bearish) and 1 (very bullish) "
             "for the given stock ticker based on recent market tone. Respond with JSON: "
@@ -49,7 +55,7 @@ class GPTProvider:
         )
         try:
             resp = self.client.chat.completions.create(
-                model="gpt-4o-mini",
+                model=model_to_use,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0,
                 max_tokens=50,
@@ -57,6 +63,11 @@ class GPTProvider:
             content = resp.choices[0].message.content if resp and resp.choices else ""
             score = _extract_score(content)
         except Exception as exc:  # pragma: no cover - network guard
+            msg = str(exc).lower()
+            if "model" in msg and "not found" in msg and model_to_use != self.fallback_model:
+                logger.warning("Model %s unavailable; retrying with %s", model_to_use, self.fallback_model)
+                self.model = self.fallback_model
+                return self.fetch_sentiment(symbol_u)
             logger.warning("GPT sentiment failed for %s: %s", symbol_u, exc)
             score = 0.0
         score = _normalize(score)

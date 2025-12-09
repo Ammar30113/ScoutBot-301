@@ -34,6 +34,7 @@ Set the following variables inside Railway (or a local `.env` file – the proje
 | `TWELVEDATA_API_KEY` | Optional fallback data |
 | `ALPHAVANTAGE_API_KEY` | Optional fallback data |
 | `OPENAI_API_KEY` | Required for GPT sentiment engine |
+| `OPENAI_MODEL` | Optional model override for sentiment (default `gpt-3.5-turbo-0125`) |
 | `USE_SENTIMENT` | Toggle sentiment system (default `true`) |
 | `SENTIMENT_CACHE_TTL` | Sentiment cache TTL seconds (default `300`) |
 | `USE_FINNHUB` | Legacy toggle (ignored by current sentiment engine) |

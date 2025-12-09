@@ -32,6 +32,7 @@ class Settings:
         or os.getenv("ALPHA_VANTAGE_KEY", "")
     )
     openai_api_key: str = field(default_factory=lambda: os.getenv("OPENAI_API_KEY", ""))
+    openai_model: str = field(default_factory=lambda: os.getenv("OPENAI_MODEL", "gpt-3.5-turbo-0125"))
     use_sentiment: bool = field(default_factory=lambda: str(os.getenv("USE_SENTIMENT", "true")).lower() != "false")
     use_finnhub: bool = field(default_factory=lambda: str(os.getenv("USE_FINNHUB", "false")).lower() == "true")
     sentiment_cache_ttl: int = field(default_factory=lambda: int(os.getenv("SENTIMENT_CACHE_TTL", "300")))
