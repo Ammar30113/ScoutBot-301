@@ -46,21 +46,21 @@ def _build_providers() -> Sequence[object]:
         return _providers_cache
 
     providers: list[object] = []
-    # Prefer non-Alpaca first to reduce rate-limit exposure
-    if settings.alphavantage_api_key:
-        providers.append(AlphaVantageProvider())
+
+    if settings.alpaca_api_key and settings.alpaca_api_secret:
+        providers.append(AlpacaProvider())
     else:
-        logger.info("PriceRouter: AlphaVantage disabled (missing ALPHAVANTAGE_API_KEY)")
+        logger.info("PriceRouter: Alpaca disabled (missing API credentials)")
 
     if settings.twelvedata_api_key:
         providers.append(TwelveDataProvider())
     else:
         logger.info("PriceRouter: TwelveData disabled (missing TWELVEDATA_API_KEY)")
 
-    if settings.alpaca_api_key and settings.alpaca_api_secret:
-        providers.append(AlpacaProvider())
+    if settings.alphavantage_api_key:
+        providers.append(AlphaVantageProvider())
     else:
-        logger.info("PriceRouter: Alpaca disabled (missing API credentials)")
+        logger.info("PriceRouter: AlphaVantage disabled (missing ALPHAVANTAGE_API_KEY)")
 
     logger.info("PriceRouter active providers: %s", [p.__class__.__name__ for p in providers])
     _providers_cache = providers
@@ -107,7 +107,7 @@ class PriceRouter:
     def get_aggregates(self, symbol: str, window: int = 60) -> List[Dict[str, float]]:
         """
         Return last ``window`` minutes of 5-minute bars.
-        Provider priority: AlphaVantage → TwelveData → Alpaca.
+        Provider priority: Alpaca → TwelveData → AlphaVantage.
         """
 
         last_error: Exception | None = None
@@ -138,7 +138,7 @@ class PriceRouter:
     def get_daily_aggregates(self, symbol: str, limit: int = 60) -> List[Dict[str, float]]:
         """
         Return up to ``limit`` daily bars.
-        Provider priority: AlphaVantage → TwelveData → Alpaca.
+        Provider priority: Alpaca → TwelveData → AlphaVantage.
         """
 
         last_error: Exception | None = None
