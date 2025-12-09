@@ -96,3 +96,21 @@ class AlphaVantageProvider:
             )
         normalized.sort(key=lambda row: row["timestamp"])
         return normalized
+
+    def get_market_cap(self, symbol: str) -> Optional[float]:
+        """Fetch market cap via AlphaVantage OVERVIEW endpoint."""
+
+        if not self.api_key:
+            return None
+        params = {"function": "OVERVIEW", "symbol": symbol.upper(), "apikey": self.api_key}
+        try:
+            response = requests.get(self.BASE_URL, params=params, timeout=10)
+            response.raise_for_status()
+            data = response.json() or {}
+            raw_cap = data.get("MarketCapitalization")
+            if raw_cap is None:
+                return None
+            return float(raw_cap)
+        except Exception as exc:  # pragma: no cover - network guard
+            logger.warning("AlphaVantage market cap fetch failed for %s: %s", symbol, exc)
+            return None

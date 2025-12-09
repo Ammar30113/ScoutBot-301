@@ -103,3 +103,21 @@ class TwelveDataProvider:
     def _normalize_timespan(self, timespan: str) -> str:
         mapping = {"1day": "1day", "1hour": "1h", "1min": "1min"}
         return mapping.get(timespan.lower(), "1day")
+
+    def get_market_cap(self, symbol: str) -> Optional[float]:
+        """Fetch market cap via TwelveData profile endpoint."""
+
+        if not self.api_key:
+            return None
+        params = {"symbol": symbol.upper(), "apikey": self.api_key}
+        try:
+            response = requests.get(f"{self.BASE_URL}/profile", params=params, timeout=10)
+            response.raise_for_status()
+            data = response.json() or {}
+            raw_cap = data.get("market_cap") or data.get("market_capitalization")
+            if raw_cap is None:
+                return None
+            return float(raw_cap)
+        except Exception as exc:  # pragma: no cover - network guard
+            logger.warning("TwelveData market cap fetch failed for %s: %s", symbol, exc)
+            return None

@@ -118,6 +118,28 @@ class PriceRouter:
                 last_error = exc
         raise RuntimeError(f"All providers failed to return aggregates for {symbol}") from last_error
 
+    def get_daily_aggregates(self, symbol: str, limit: int = 60) -> List[Dict[str, float]]:
+        """
+        Return up to ``limit`` daily bars.
+        Provider priority: AlphaVantage → TwelveData → Alpaca.
+        """
+
+        last_error: Exception | None = None
+        for provider in self.providers:
+            provider_name = provider.__class__.__name__
+            try:
+                if hasattr(provider, "get_aggregates"):
+                    bars = provider.get_aggregates(symbol, timespan="1day", limit=limit)  # type: ignore[arg-type]
+                else:
+                    continue
+                frame = self.aggregates_to_dataframe(bars)
+                if not frame.empty:
+                    return frame.to_dict("records")
+            except Exception as exc:  # pragma: no cover - network guard
+                logger.warning("%s daily aggregates failed for %s: %s", provider_name, symbol, exc)
+                last_error = exc
+        raise RuntimeError(f"All providers failed to return daily aggregates for {symbol}") from last_error
+
     @staticmethod
     def aggregates_to_dataframe(bars: List[Dict[str, float]]) -> pd.DataFrame:
         frame = pd.DataFrame(bars)

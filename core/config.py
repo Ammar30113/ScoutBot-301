@@ -5,7 +5,6 @@ from dataclasses import dataclass, field
 import logging
 from functools import lru_cache
 from pathlib import Path
-from typing import List
 
 from dotenv import load_dotenv
 
@@ -40,9 +39,12 @@ class Settings:
     universe_fallback_csv: Path = field(
         default_factory=lambda: Path(os.getenv("UNIVERSE_FALLBACK_CSV", "universe/fallback_universe.csv"))
     )
-    microcap_etfs: List[str] = field(
-        default_factory=lambda: [token.strip().upper() for token in os.getenv("MICROCAP_ETFS", "IWM,IWC,SMLF,VTWO,URTY").split(",") if token.strip()]
-    )
+    min_dollar_volume: float = field(default_factory=lambda: float(os.getenv("MIN_DOLLAR_VOLUME", 8_000_000)))
+    min_mkt_cap: float = field(default_factory=lambda: float(os.getenv("MIN_MKT_CAP", 300_000_000)))
+    max_mkt_cap: float = field(default_factory=lambda: float(os.getenv("MAX_MKT_CAP", 5_000_000_000)))
+    min_price: float = field(default_factory=lambda: float(os.getenv("MIN_PRICE", 2.0)))
+    max_price: float = field(default_factory=lambda: float(os.getenv("MAX_PRICE", 80.0)))
+    max_universe_size: int = field(default_factory=lambda: int(os.getenv("MAX_UNIVERSE_SIZE", 50)))
 
     scheduler_interval_seconds: int = field(default_factory=lambda: int(os.getenv("SCHEDULER_INTERVAL_SECONDS", "900")))
     max_positions: int = field(default_factory=lambda: int(os.getenv("MAX_POSITIONS", "10")))
@@ -58,8 +60,6 @@ class Settings:
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     settings = Settings()
-    if not settings.microcap_etfs:
-        settings.microcap_etfs = ["IWM", "IWC", "SMLF", "VTWO", "URTY"]
     settings.universe_fallback_csv.parent.mkdir(parents=True, exist_ok=True)
     settings.portfolio_state_path.parent.mkdir(parents=True, exist_ok=True)
     logger.info("TWELVEDATA_API_KEY detected: %s", bool(settings.twelvedata_api_key))
