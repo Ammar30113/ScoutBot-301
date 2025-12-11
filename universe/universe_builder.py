@@ -25,7 +25,6 @@ _twelve = TwelveDataProvider() if settings.twelvedata_api_key else None
 SKIP_LOG_SAMPLE_LIMIT = 5
 
 CANDIDATE_FILES = [
-    Path("universe/sp1500.csv"),
     Path("universe/russell3000.csv"),
     settings.universe_fallback_csv,
 ]

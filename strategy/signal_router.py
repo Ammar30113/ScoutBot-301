@@ -29,7 +29,7 @@ def route_signals(universe: List[str], crash_mode: bool = False) -> List[Dict[st
     for symbol, prob, features in ml_preds:
         if symbol in rate_limited:
             continue
-        time.sleep(0.01)  # stagger provider requests slightly for large universes
+        time.sleep(0.05)  # stagger provider requests slightly for large universes (reduce API bursts)
         rank_component = 1.0 - (list(momentum_map.keys()).index(symbol) / max_rank) if symbol in momentum_map else 0.0
         ml_threshold_trend = 0.22
         ml_threshold_reversal = 0.28
