@@ -138,7 +138,7 @@ class PriceRouter:
     def get_daily_aggregates(self, symbol: str, limit: int = 60) -> List[Dict[str, float]]:
         """
         Return up to ``limit`` daily bars.
-        Provider priority: Alpaca → TwelveData → AlphaVantage.
+        Provider priority: TwelveData → AlphaVantage → Alpaca (Alpaca skipped for daily bars to avoid 429s).
         """
 
         last_error: Exception | None = None
@@ -148,6 +148,9 @@ class PriceRouter:
         combined: List[Dict[str, float]] = []
         for provider in self.providers:
             provider_name = provider.__class__.__name__
+            if isinstance(provider, AlpacaProvider):
+                # Skip Alpaca for daily bars to avoid rate limits; rely on TwelveData/AlphaVantage
+                continue
             try:
                 if hasattr(provider, "get_aggregates"):
                     bars = provider.get_aggregates(symbol, timespan="1day", limit=limit)  # type: ignore[arg-type]

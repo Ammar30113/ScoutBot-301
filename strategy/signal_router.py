@@ -6,8 +6,6 @@ from typing import Dict, List
 
 from core.config import get_settings
 from data.price_router import PriceRouter
-from trader.order_executor import trading_client as alpaca_client
-from trader.pnl_tracker import update_daily_pnl
 from strategy.momentum import compute_momentum_scores
 from strategy.technicals import passes_entry_filter, compute_atr
 from strategy.ml_classifier import generate_predictions
@@ -19,7 +17,7 @@ price_router = PriceRouter()
 settings = get_settings()
 
 
-def route_signals(universe: List[str], crash_mode: bool = False) -> List[Dict[str, float | str]]:
+def route_signals(universe: List[str], crash_mode: bool = False, context=None) -> List[Dict[str, float | str]]:
     momentum = compute_momentum_scores(universe, top_k=0, crash_mode=crash_mode)
     momentum_map = {sym: score for sym, score in momentum}
 
