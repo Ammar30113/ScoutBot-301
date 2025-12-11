@@ -6,6 +6,8 @@ from typing import Dict, List
 
 from core.config import get_settings
 from data.price_router import PriceRouter
+from trader.order_executor import trading_client as alpaca_client
+from trader.pnl_tracker import update_daily_pnl
 from strategy.momentum import compute_momentum_scores
 from strategy.technicals import passes_entry_filter, compute_atr
 from strategy.ml_classifier import generate_predictions
@@ -87,7 +89,11 @@ def route_signals(universe: List[str], crash_mode: bool = False) -> List[Dict[st
         )
         score_threshold = 0.32
         # Sentiment contributes ~15% of the final score (within 10-25% envelope)
-        final_score = 0.45 * rank_component + 0.25 * prob + 0.15 * sentiment + 0.15 * momentum_score
+        raw_score = 0.45 * rank_component + 0.25 * prob + 0.15 * sentiment + 0.15 * momentum_score
+
+        # P&L penalty/boost injected from main
+        pnl_penalty = context.pnl_penalty if hasattr(context, "pnl_penalty") else 0.0
+        final_score = raw_score - pnl_penalty
         momentum_signal = momentum_base and final_score > score_threshold
 
         dip_buy_ok = short_slope < -0.20 and vol_ratio > 1.1 and prob > ml_threshold_reversal

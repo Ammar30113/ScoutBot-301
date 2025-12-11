@@ -7,15 +7,17 @@ import pytz
 from universe.universe_builder import get_universe
 from strategy.signal_router import route_signals
 from trader.allocation import allocate_positions
-from trader.order_executor import execute_trades, close_position, list_positions
+from trader.order_executor import execute_trades, close_position, list_positions, trading_client
 from trader import risk_model
 from data.price_router import PriceRouter
 from strategy.crash_detector import is_crash_mode
-from trader.pnl_tracker import update_daily_pl
+from trader.pnl_tracker import update_daily_pnl
+from types import SimpleNamespace
 
 logging.basicConfig(level=logging.INFO, format="%Y-%m-%d %H:%M:%S | %(levelname)s | %(name)s | %(message)s")
 logger = logging.getLogger(__name__)
 price_router = PriceRouter()
+context = SimpleNamespace()
 
 
 def market_open_now() -> bool:
@@ -32,8 +34,20 @@ def microcap_cycle():
         try:
             if not market_open_now():
                 logger.info("Market closed — skipping cycle")
-                update_daily_pl()
                 continue
+            # Compute P&L once per cycle
+            pnl_state = update_daily_pnl(trading_client)
+            pnl_penalty = 0.0
+
+            if pnl_state:
+                if pnl_state.equity_return_pct < -0.01:
+                    pnl_penalty = 0.05
+                elif pnl_state.equity_return_pct > 0.02:
+                    pnl_penalty = -0.03
+
+            # Pass penalty into signal router
+            context.pnl_penalty = pnl_penalty
+            logger.info(f"P&L penalty for this cycle: {pnl_penalty}")
             crash, drop = is_crash_mode()
             logger.info("Crash mode = %s (SPY 5min drop = %.3f)", crash, drop)
             logger.info("=== Crash Mode %s ===", "ACTIVE" if crash else "OFF")
@@ -43,7 +57,7 @@ def microcap_cycle():
                 logger.info("Universe empty; skipping cycle")
                 continue
 
-            signals = route_signals(universe, crash_mode=crash)
+            signals = route_signals(universe, crash_mode=crash, context=context)
             if not signals:
                 logger.info("No signals generated; skipping allocations")
                 continue
@@ -85,7 +99,8 @@ def microcap_cycle():
 
             logger.info("=== Cycle Complete ===")
             # After finishing a cycle:
-            update_daily_pl()
+            update_daily_pnl(trading_client)
+            logger.info("Daily P/L updated.")
         except Exception as exc:  # pragma: no cover - defensive loop
             logger.exception("Cycle failed: %s", exc)
         finally:
