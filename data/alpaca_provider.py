@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Dict, List, Optional
+from collections import defaultdict
 
 import requests
 
@@ -9,6 +10,17 @@ from core.config import get_settings
 from core.logger import get_logger
 
 logger = get_logger(__name__)
+LOG_SAMPLE_LIMIT = 5
+_warn_counts: dict[str, int] = defaultdict(int)
+
+
+def _warn_sample(reason: str, message: str) -> None:
+    count = _warn_counts[reason] + 1
+    _warn_counts[reason] = count
+    if count <= LOG_SAMPLE_LIMIT:
+        logger.warning(message)
+    elif count == LOG_SAMPLE_LIMIT + 1:
+        logger.info("%s (suppressing further repeats; %s occurrences)", message, count)
 
 
 class AlpacaProvider:
@@ -53,7 +65,7 @@ class AlpacaProvider:
             data = response.json().get("bars", []) or []
             return [self._normalize_bar(item) for item in data]
         except Exception as exc:  # pragma: no cover - network guard
-            logger.warning("Alpaca aggregates failed for %s: %s", symbol, exc)
+            _warn_sample("aggregates_failed", f"Alpaca aggregates failed for {symbol}: {exc}")
             return []
 
     def _normalize_timespan(self, timespan: str) -> str:

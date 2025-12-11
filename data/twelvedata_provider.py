@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Dict, List, Optional
+from collections import defaultdict
 
 import requests
 
@@ -10,6 +11,17 @@ from core.logger import get_logger
 from core.cache import get_cache
 
 logger = get_logger(__name__)
+LOG_SAMPLE_LIMIT = 5
+_warn_counts: dict[str, int] = defaultdict(int)
+
+
+def _warn_sample(reason: str, message: str) -> None:
+    count = _warn_counts[reason] + 1
+    _warn_counts[reason] = count
+    if count <= LOG_SAMPLE_LIMIT:
+        logger.warning(message)
+    elif count == LOG_SAMPLE_LIMIT + 1:
+        logger.info("%s (suppressing further repeats; %s occurrences)", message, count)
 
 
 class TwelveDataProvider:
@@ -64,15 +76,15 @@ class TwelveDataProvider:
         try:
             response = requests.get(f"{self.BASE_URL}/time_series", params=params, timeout=10)
             if response.status_code == 429:
-                logger.warning("TwelveData aggregates rate-limited for %s", symbol)
+                _warn_sample("aggregates_rate_limited", f"TwelveData aggregates rate-limited for {symbol}")
                 return cached
             response.raise_for_status()
             values = response.json().get("values", []) or []
             if not values:
-                logger.warning("TwelveData aggregates empty for %s", symbol)
+                _warn_sample("aggregates_empty", f"TwelveData aggregates empty for {symbol}")
                 return cached
         except Exception as exc:  # pragma: no cover - network guard
-            logger.warning("TwelveData aggregates failed for %s: %s", symbol, exc)
+            _warn_sample("aggregates_failed", f"TwelveData aggregates failed for {symbol}: {exc}")
             return cached
         normalized: List[Dict[str, float]] = []
         for row in reversed(values):  # API returns newest first
@@ -106,15 +118,15 @@ class TwelveDataProvider:
         try:
             response = requests.get(f"{self.BASE_URL}/time_series", params=params, timeout=10)
             if response.status_code == 429:
-                logger.warning("TwelveData intraday rate-limited for %s", symbol)
+                _warn_sample("intraday_rate_limited", f"TwelveData intraday rate-limited for {symbol}")
                 return cached
             response.raise_for_status()
             values = response.json().get("values", []) or []
             if not values:
-                logger.warning("TwelveData intraday aggregates empty for %s", symbol)
+                _warn_sample("intraday_empty", f"TwelveData intraday aggregates empty for {symbol}")
                 return cached
         except Exception as exc:  # pragma: no cover - network guard
-            logger.warning("TwelveData intraday aggregates failed for %s: %s", symbol, exc)
+            _warn_sample("intraday_failed", f"TwelveData intraday aggregates failed for {symbol}: {exc}")
             return cached
         normalized: List[Dict[str, float]] = []
         for row in reversed(values):  # API returns newest first
@@ -177,12 +189,12 @@ class TwelveDataProvider:
         try:
             response = requests.get(f"{self.BASE_URL}/time_series", params=params, timeout=10)
             if response.status_code == 429:
-                logger.warning("TwelveData batch daily bars rate-limited for %s symbols", len(symbols))
+                _warn_sample("batch_rate_limited", f"TwelveData batch daily bars rate-limited for {len(symbols)} symbols")
                 return results
             response.raise_for_status()
             data = response.json() or {}
         except Exception as exc:  # pragma: no cover - network guard
-            logger.warning("TwelveData batch daily bars failed: %s", exc)
+            _warn_sample("batch_failed", f"TwelveData batch daily bars failed: {exc}")
             return results
 
         # TwelveData multi response is a dict keyed by symbol

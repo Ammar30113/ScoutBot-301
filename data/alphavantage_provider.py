@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Dict, List, Optional
+from collections import defaultdict
 
 import requests
 
@@ -10,6 +11,17 @@ from core.logger import get_logger
 from core.cache import get_cache
 
 logger = get_logger(__name__)
+LOG_SAMPLE_LIMIT = 5
+_warn_counts: dict[str, int] = defaultdict(int)
+
+
+def _warn_sample(reason: str, message: str) -> None:
+    count = _warn_counts[reason] + 1
+    _warn_counts[reason] = count
+    if count <= LOG_SAMPLE_LIMIT:
+        logger.warning(message)
+    elif count == LOG_SAMPLE_LIMIT + 1:
+        logger.info("%s (suppressing further repeats; %s occurrences)", message, count)
 
 
 class AlphaVantageProvider:
@@ -57,15 +69,15 @@ class AlphaVantageProvider:
         try:
             response = requests.get(self.BASE_URL, params=params, timeout=10)
             if response.status_code == 429:
-                logger.warning("AlphaVantage aggregates rate-limited for %s", symbol)
+                _warn_sample("aggregates_rate_limited", f"AlphaVantage aggregates rate-limited for {symbol}")
                 return cached
             response.raise_for_status()
             data = response.json().get("Time Series (Daily)", {}) or {}
             if not data:
-                logger.warning("AlphaVantage aggregates empty for %s", symbol)
+                _warn_sample("aggregates_empty", f"AlphaVantage aggregates empty for {symbol}")
                 return cached
         except Exception as exc:  # pragma: no cover - network guard
-            logger.warning("AlphaVantage aggregates failed for %s: %s", symbol, exc)
+            _warn_sample("aggregates_failed", f"AlphaVantage aggregates failed for {symbol}: {exc}")
             return cached
         normalized: List[Dict[str, float]] = []
         for date_str, values in list(data.items())[:limit]:
@@ -101,15 +113,15 @@ class AlphaVantageProvider:
         try:
             response = requests.get(self.BASE_URL, params=params, timeout=10)
             if response.status_code == 429:
-                logger.warning("AlphaVantage intraday rate-limited for %s", symbol)
+                _warn_sample("intraday_rate_limited", f"AlphaVantage intraday rate-limited for {symbol}")
                 return cached
             response.raise_for_status()
             data = response.json().get("Time Series (5min)", {}) or {}
             if not data:
-                logger.warning("AlphaVantage intraday aggregates empty for %s", symbol)
+                _warn_sample("intraday_empty", f"AlphaVantage intraday aggregates empty for {symbol}")
                 return cached
         except Exception as exc:  # pragma: no cover - network guard
-            logger.warning("AlphaVantage intraday aggregates failed for %s: %s", symbol, exc)
+            _warn_sample("intraday_failed", f"AlphaVantage intraday aggregates failed for {symbol}: {exc}")
             return cached
 
         normalized: List[Dict[str, float]] = []
@@ -140,7 +152,7 @@ class AlphaVantageProvider:
         try:
             response = requests.get(self.BASE_URL, params=params, timeout=10)
             if response.status_code == 429:
-                logger.warning("AlphaVantage fundamentals rate-limited for %s", symbol)
+                _warn_sample("fundamentals_rate_limited", f"AlphaVantage fundamentals rate-limited for {symbol}")
                 return cached if cached is not None else 0.0
             response.raise_for_status()
             data = response.json() or {}
