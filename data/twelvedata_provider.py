@@ -24,7 +24,7 @@ def _warn_sample(reason: str, message: str) -> None:
         logger.info("%s (suppressing further repeats; %s occurrences)", message, count)
 
 
-MULTI_SYMBOL_CHUNK = 150
+MULTI_SYMBOL_CHUNK = 80
 
 
 class TwelveDataProvider:
