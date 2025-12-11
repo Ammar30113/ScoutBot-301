@@ -47,11 +47,6 @@ def _build_providers() -> Sequence[object]:
 
     providers: list[object] = []
 
-    if settings.alpaca_api_key and settings.alpaca_api_secret:
-        providers.append(AlpacaProvider())
-    else:
-        logger.info("PriceRouter: Alpaca disabled (missing API credentials)")
-
     if settings.twelvedata_api_key:
         providers.append(TwelveDataProvider())
     else:
@@ -61,6 +56,11 @@ def _build_providers() -> Sequence[object]:
         providers.append(AlphaVantageProvider())
     else:
         logger.info("PriceRouter: AlphaVantage disabled (missing ALPHAVANTAGE_API_KEY)")
+
+    if settings.alpaca_api_key and settings.alpaca_api_secret:
+        providers.append(AlpacaProvider())
+    else:
+        logger.info("PriceRouter: Alpaca disabled (missing API credentials)")
 
     logger.info("PriceRouter active providers: %s", [p.__class__.__name__ for p in providers])
     _providers_cache = providers
