@@ -11,6 +11,7 @@ from trader.order_executor import execute_trades, close_position, list_positions
 from trader import risk_model
 from data.price_router import PriceRouter
 from strategy.crash_detector import is_crash_mode
+from trader.pnl_tracker import update_daily_pl
 
 logging.basicConfig(level=logging.INFO, format="%Y-%m-%d %H:%M:%S | %(levelname)s | %(name)s | %(message)s")
 logger = logging.getLogger(__name__)
@@ -31,6 +32,7 @@ def microcap_cycle():
         try:
             if not market_open_now():
                 logger.info("Market closed — skipping cycle")
+                update_daily_pl()
                 continue
             crash, drop = is_crash_mode()
             logger.info("Crash mode = %s (SPY 5min drop = %.3f)", crash, drop)
@@ -82,6 +84,8 @@ def microcap_cycle():
                     close_position(pos.symbol)
 
             logger.info("=== Cycle Complete ===")
+            # After finishing a cycle:
+            update_daily_pl()
         except Exception as exc:  # pragma: no cover - defensive loop
             logger.exception("Cycle failed: %s", exc)
         finally:

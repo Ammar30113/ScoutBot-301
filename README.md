@@ -69,3 +69,12 @@ python main.py
 - `OPENAI_MODEL`: Primary model for sentiment. Default: `gpt-3.5-turbo-16k`. Allowed for this project: `gpt-3.5-turbo-16k`, `gpt-4o-2024-05-13`, `gpt-4.1-2025-04-14`, `gpt-5`.
 - `USE_SENTIMENT`: If false, sentiment is skipped and treated as 0.
 - `SENTIMENT_CACHE_TTL`: Per-symbol cache TTL (seconds). Default: `300`.
+
+P/L Tracking (Hybrid)
+---------------------
+P/L is logged once per trading day into `data/pnl/YYYY-MM-DD.json`.
+
+Env variables needed:
+- `APCA_API_KEY_ID`
+- `APCA_API_SECRET_KEY`
+- `MODE` (`paper` or `live`)

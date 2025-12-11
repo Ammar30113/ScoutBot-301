@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field
 import logging
+from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 
@@ -11,6 +11,10 @@ from dotenv import load_dotenv
 logger = logging.getLogger(__name__)
 
 load_dotenv()
+
+ALPACA_API_KEY = os.getenv("APCA_API_KEY_ID")
+ALPACA_API_SECRET = os.getenv("APCA_API_SECRET_KEY")
+MODE = os.getenv("MODE", "paper")
 
 
 def _get_bool(name: str, default: bool) -> bool:
