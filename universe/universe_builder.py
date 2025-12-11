@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -21,11 +22,16 @@ price_router = PriceRouter()
 _alpha = AlphaVantageProvider() if settings.alphavantage_api_key else None
 _twelve = TwelveDataProvider() if settings.twelvedata_api_key else None
 
+SKIP_LOG_SAMPLE_LIMIT = 5
+
 CANDIDATE_FILES = [
     Path("universe/sp1500.csv"),
     Path("universe/russell3000.csv"),
     settings.universe_fallback_csv,
 ]
+
+_skip_counts: dict[str, int] = defaultdict(int)
+_skip_sample_counts: dict[str, int] = defaultdict(int)
 
 
 def _filter_symbols(symbols: list[str]) -> list[str]:
@@ -69,19 +75,22 @@ def _load_daily_frame(symbol: str, limit: int = 60, preloaded: Optional[List[Dic
         bars = preloaded if preloaded is not None else price_router.get_daily_aggregates(symbol, limit=limit)
         frame = PriceRouter.aggregates_to_dataframe(bars)
         if frame.empty:
-            logger.warning("Universe skip %s: no daily bars (skip_volume_history)", symbol)
+            _log_skip(symbol, "skip_volume_history", "no daily bars")
             return None
         return frame
     except Exception as exc:  # pragma: no cover - network guard
-        logger.warning("Universe skip %s: price data unavailable (skip_volume_history) (%s)", symbol, exc)
+        _log_skip(symbol, "skip_volume_history", f"price data unavailable ({exc})")
         return None
 
 
 def _log_skip(symbol: str, reason: str, detail: str = "") -> None:
     message = f"Universe skip {symbol}: {reason}"
-    if detail:
-        message = f"{message} ({detail})"
-    logger.info(message)
+    _skip_counts[reason] += 1
+    if _skip_sample_counts[reason] < SKIP_LOG_SAMPLE_LIMIT:
+        _skip_sample_counts[reason] += 1
+        if detail:
+            message = f"{message} ({detail})"
+        logger.info(message)
 
 
 def _passes_filters(symbol: str, frame: pd.DataFrame) -> Optional[dict]:
@@ -153,6 +162,8 @@ def _passes_filters(symbol: str, frame: pd.DataFrame) -> Optional[dict]:
 def get_universe() -> list[str]:
     """Build universe via liquidity/volatility/market-cap filters."""
 
+    _skip_counts.clear()
+    _skip_sample_counts.clear()
     candidates = _filter_symbols(_load_candidates())
     total_candidates = len(candidates)
     logger.info("Universe: fetched %s candidates", total_candidates)
@@ -176,6 +187,12 @@ def get_universe() -> list[str]:
         len(passed),
     )
     logger.info("%s final universe symbols", len(final_symbols))
+
+    if _skip_counts:
+        summary = ", ".join(f"{reason}={count}" for reason, count in sorted(_skip_counts.items()))
+        logger.info("Universe skip summary: %s", summary)
+        if any(count > SKIP_LOG_SAMPLE_LIMIT for count in _skip_counts.values()):
+            logger.info("Skip logs sampled (first %s per reason shown)", SKIP_LOG_SAMPLE_LIMIT)
 
     if not final_symbols:
         fallback = _csv_universe(settings.universe_fallback_csv)
