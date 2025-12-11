@@ -24,6 +24,9 @@ def _warn_sample(reason: str, message: str) -> None:
         logger.info("%s (suppressing further repeats; %s occurrences)", message, count)
 
 
+MULTI_SYMBOL_CHUNK = 150
+
+
 class TwelveDataProvider:
     """Lightweight TwelveData wrapper for price + aggregates."""
 
@@ -184,12 +187,26 @@ class TwelveDataProvider:
         results: Dict[str, List[Dict[str, float]]] = {}
         if not self.api_key or not symbols:
             return results
-        joined = ",".join(sorted(set(sym.upper() for sym in symbols)))
+        unique_symbols = list(dict.fromkeys(sym.upper() for sym in symbols))
+        chunks = [unique_symbols[i : i + MULTI_SYMBOL_CHUNK] for i in range(0, len(unique_symbols), MULTI_SYMBOL_CHUNK)]
+        for chunk in chunks:
+            chunk_results = self._fetch_multi_chunk(chunk, limit)
+            results.update(chunk_results)
+        return results
+
+    def _fetch_multi_chunk(self, symbols: List[str], limit: int) -> Dict[str, List[Dict[str, float]]]:
+        results: Dict[str, List[Dict[str, float]]] = {}
+        if not symbols:
+            return results
+        joined = ",".join(symbols)
         params = {"symbol": joined, "interval": "1day", "apikey": self.api_key, "outputsize": limit}
         try:
             response = requests.get(f"{self.BASE_URL}/time_series", params=params, timeout=10)
             if response.status_code == 429:
                 _warn_sample("batch_rate_limited", f"TwelveData batch daily bars rate-limited for {len(symbols)} symbols")
+                return results
+            if response.status_code == 414:
+                _warn_sample("batch_uri_too_long", f"TwelveData batch request too long; chunk size={len(symbols)}")
                 return results
             response.raise_for_status()
             data = response.json() or {}
@@ -197,7 +214,6 @@ class TwelveDataProvider:
             _warn_sample("batch_failed", f"TwelveData batch daily bars failed: {exc}")
             return results
 
-        # TwelveData multi response is a dict keyed by symbol
         if not isinstance(data, dict):
             return results
         for sym, payload in data.items():
