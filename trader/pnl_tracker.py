@@ -12,7 +12,11 @@ def update_daily_pnl(alpaca_client):
 
     equity = float(account.equity)
     unrealized = sum(float(p.unrealized_pl) for p in positions)
-    realized = float(account.realized_pl)
+    realized_raw = getattr(account, "realized_pl", 0.0)
+    try:
+        realized = float(realized_raw)
+    except Exception:
+        realized = 0.0
 
     if state.prior_equity == 0:
         state.prior_equity = equity
