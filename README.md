@@ -34,10 +34,9 @@ Set the following variables inside Railway (or a local `.env` file – the proje
 | `TWELVEDATA_API_KEY` | Optional fallback data |
 | `ALPHAVANTAGE_API_KEY` | Optional fallback data |
 | `OPENAI_API_KEY` | Required for GPT sentiment engine |
-| `OPENAI_MODEL` | Optional model override for sentiment (default `gpt-3.5-turbo-0125`) |
+| `OPENAI_MODEL` | Optional model override for sentiment (default `gpt-3.5-turbo-16k`) |
 | `USE_SENTIMENT` | Toggle sentiment system (default `true`) |
 | `SENTIMENT_CACHE_TTL` | Sentiment cache TTL seconds (default `300`) |
-| `USE_FINNHUB` | Legacy toggle (ignored by current sentiment engine) |
 | `MIN_DOLLAR_VOLUME` | Min avg daily dollar volume last 10 days (default 8000000) |
 | `MIN_MKT_CAP` | Min market cap filter (default 300000000) |
 | `MAX_MKT_CAP` | Max market cap filter (default 5000000000) |
@@ -64,3 +63,9 @@ python main.py
 
 ## Notes
 - The bundled ML model ships as a placeholder trained on synthetic data. For production, retrain `models/microcap_model.pkl` with historical features + outcomes.
+
+## Sentiment (GPT-only)
+- `OPENAI_API_KEY`: OpenAI project key with permission to call chat models.
+- `OPENAI_MODEL`: Primary model for sentiment. Default: `gpt-3.5-turbo-16k`. Allowed for this project: `gpt-3.5-turbo-16k`, `gpt-4o-2024-05-13`, `gpt-4.1-2025-04-14`, `gpt-5`.
+- `USE_SENTIMENT`: If false, sentiment is skipped and treated as 0.
+- `SENTIMENT_CACHE_TTL`: Per-symbol cache TTL (seconds). Default: `300`.

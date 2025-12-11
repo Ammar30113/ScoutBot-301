@@ -1,72 +1,42 @@
-from __future__ import annotations
-
-import logging
 import time
-from typing import Dict, Optional
+import logging
+from typing import Dict, Tuple
 
-from core.config import get_settings
-from sentiment.gpt_provider import GPTProvider
+from core.config import USE_SENTIMENT, SENTIMENT_CACHE_TTL
+from sentiment.gpt_provider import get_gpt_sentiment
 
-logger = logging.getLogger(__name__)
-settings = get_settings()
+log = logging.getLogger(__name__)
+
+# cache: symbol -> (timestamp, value)
+_cache: Dict[str, Tuple[float, float]] = {}
 
 
-def _normalize(score: float) -> float:
-    try:
-        val = float(score)
-    except (TypeError, ValueError):
+def _is_fresh(ts: float, ttl: int) -> bool:
+    return (time.time() - ts) <= ttl
+
+
+def get_sentiment(symbol: str) -> float:
+    """
+    Public sentiment entry point used by strategy.
+    Returns a float in [-1, 1]. If USE_SENTIMENT is False, always returns 0.0.
+    Uses an in-memory cache with TTL (SENTIMENT_CACHE_TTL seconds).
+    """
+    if not USE_SENTIMENT:
+        log.info("sentiment.engine | Sentiment disabled via USE_SENTIMENT; returning 0.0")
         return 0.0
-    return max(min(val, 1.0), -1.0)
 
+    ttl = SENTIMENT_CACHE_TTL
 
-class SentimentEngine:
-    def __init__(self) -> None:
-        self.enabled = settings.use_sentiment
-        self.cache_ttl = settings.sentiment_cache_ttl
-        self.provider = GPTProvider()
-        self._cache: Dict[str, Dict] = {}
+    # Cache lookup
+    if symbol in _cache:
+        ts, val = _cache[symbol]
+        if _is_fresh(ts, ttl):
+            log.info(f"sentiment.engine | Cache hit for {symbol}: {val:.4f}")
+            return val
+        else:
+            log.info(f"sentiment.engine | Cache expired for {symbol}")
 
-    def _from_cache(self, symbol: str) -> Optional[Dict]:
-        entry = self._cache.get(symbol.upper())
-        if not entry:
-            return None
-        if time.time() - entry.get("timestamp", 0) > self.cache_ttl:
-            return None
-        return entry
-
-    def _set_cache(self, symbol: str, payload: Dict) -> None:
-        payload["timestamp"] = time.time()
-        self._cache[symbol.upper()] = payload
-
-    def _fetch_symbol(self, symbol: str) -> Dict:
-        symbol_u = symbol.upper()
-        res = self.provider.fetch_sentiment(symbol_u)
-        score = _normalize(res.get("sentiment_score", 0.0))
-        payload = {
-            "symbol": symbol_u,
-            "sentiment_score": score,
-            "headlines": res.get("headlines") or [],
-            "source": res.get("source", "gpt"),
-        }
-        logger.info("GPT sentiment for %s = %.4f", symbol_u, score)
-        self._set_cache(symbol_u, payload)
-        return payload
-
-    def get_sentiment(self, symbol: str) -> Dict:
-        if not self.enabled:
-            return {"symbol": symbol.upper(), "sentiment_score": 0.0, "headlines": [], "source": "disabled"}
-
-        cached = self._from_cache(symbol)
-        if cached:
-            return cached
-        return self._fetch_symbol(symbol)
-
-    def get_news(self, symbol: str) -> Dict:
-        return self.get_sentiment(symbol)
-
-
-_engine = SentimentEngine()
-
-
-def get_sentiment(symbol: str) -> Dict:
-    return _engine.get_sentiment(symbol)
+    # Fetch fresh sentiment from GPT
+    val = get_gpt_sentiment(symbol)
+    _cache[symbol] = (time.time(), val)
+    return val

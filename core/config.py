@@ -13,6 +13,22 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 
 
+def _get_bool(name: str, default: bool) -> bool:
+    val = os.getenv(name)
+    if val is None:
+        return default
+    return val.lower() in ("1", "true", "yes", "y")
+
+
+# Core sentiment/env toggles exposed for direct imports
+USE_SENTIMENT = _get_bool("USE_SENTIMENT", True)
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-3.5-turbo-16k")
+try:
+    SENTIMENT_CACHE_TTL = int(os.getenv("SENTIMENT_CACHE_TTL", "300"))
+except ValueError:
+    SENTIMENT_CACHE_TTL = 300
+
+
 @dataclass
 class Settings:
     """Central configuration object loaded from environment variables."""
@@ -31,10 +47,9 @@ class Settings:
         or os.getenv("ALPHA_VANTAGE_KEY", "")
     )
     openai_api_key: str = field(default_factory=lambda: os.getenv("OPENAI_API_KEY", ""))
-    openai_model: str = field(default_factory=lambda: os.getenv("OPENAI_MODEL", "gpt-3.5-turbo-0125"))
-    use_sentiment: bool = field(default_factory=lambda: str(os.getenv("USE_SENTIMENT", "true")).lower() != "false")
-    use_finnhub: bool = field(default_factory=lambda: str(os.getenv("USE_FINNHUB", "false")).lower() == "true")
-    sentiment_cache_ttl: int = field(default_factory=lambda: int(os.getenv("SENTIMENT_CACHE_TTL", "300")))
+    openai_model: str = field(default_factory=lambda: OPENAI_MODEL)
+    use_sentiment: bool = field(default_factory=lambda: USE_SENTIMENT)
+    sentiment_cache_ttl: int = field(default_factory=lambda: SENTIMENT_CACHE_TTL)
 
     universe_fallback_csv: Path = field(
         default_factory=lambda: Path(os.getenv("UNIVERSE_FALLBACK_CSV", "universe/fallback_universe.csv"))

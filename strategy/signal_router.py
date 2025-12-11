@@ -6,11 +6,11 @@ from typing import Dict, List
 
 from core.config import get_settings
 from data.price_router import PriceRouter
-from sentiment.engine import get_sentiment
 from strategy.momentum import compute_momentum_scores
 from strategy.technicals import passes_entry_filter, compute_atr
 from strategy.ml_classifier import generate_predictions
 from strategy.reversal import compute_reversal_signal
+from strategy.sentiment_engine import get_symbol_sentiment
 
 logger = logging.getLogger(__name__)
 price_router = PriceRouter()
@@ -37,8 +37,7 @@ def route_signals(universe: List[str], crash_mode: bool = False) -> List[Dict[st
             continue
         sentiment = 0.0
         if settings.use_sentiment:
-            sentiment_payload = get_sentiment(symbol)
-            sentiment_raw = float(sentiment_payload.get("sentiment_score", 0.0) or 0.0)
+            sentiment_raw = float(get_symbol_sentiment(symbol) or 0.0)
             sentiment = (sentiment_raw + 1.0) / 2.0  # map [-1,1] to [0,1]
 
         try:
