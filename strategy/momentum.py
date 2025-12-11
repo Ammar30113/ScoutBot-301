@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import List, Optional, Sequence, Tuple
+from collections import defaultdict
 
 import pandas as pd
 
@@ -11,6 +12,17 @@ logger = get_logger(__name__)
 router = PriceRouter()
 
 MOMENTUM_TOP_K = 10
+LOG_SAMPLE_LIMIT = 5
+_warn_counts: dict[str, int] = defaultdict(int)
+
+
+def _warn_sample(symbol: str, exc: Exception) -> None:
+    count = _warn_counts[symbol] + 1
+    _warn_counts[symbol] = count
+    if count <= LOG_SAMPLE_LIMIT:
+        logger.warning("Aggregates unavailable for %s: %s", symbol, exc)
+    elif count == LOG_SAMPLE_LIMIT + 1:
+        logger.info("Aggregates unavailable for %s (suppressing repeats; %s occurrences)", symbol, count)
 
 
 def compute_momentum_scores(
@@ -21,7 +33,7 @@ def compute_momentum_scores(
         try:
             bars = router.get_aggregates(symbol, window=60)
         except Exception as exc:  # pragma: no cover - network guard
-            logger.warning("Aggregates unavailable for %s: %s", symbol, exc)
+            _warn_sample(symbol, exc)
             continue
         df = PriceRouter.aggregates_to_dataframe(bars)
         if df.empty or len(df) < 12:

@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 from typing import Dict, Iterable, List, Tuple
+from collections import defaultdict
 
 import joblib
 import numpy as np
@@ -31,6 +32,8 @@ FEATURE_COLUMNS = [
 ]
 
 price_router = PriceRouter()
+LOG_SAMPLE_LIMIT = 5
+_warn_counts: dict[str, int] = defaultdict(int)
 
 
 class MLClassifier:
@@ -220,7 +223,12 @@ def generate_predictions(universe: Iterable[str], crash_mode: bool = False) -> L
         try:
             bars = price_router.get_aggregates(symbol, window=120)
         except Exception as exc:  # pragma: no cover - network guard
-            logger.warning("Aggregates unavailable for %s: %s", symbol, exc)
+            _warn_counts[symbol] += 1
+            count = _warn_counts[symbol]
+            if count <= LOG_SAMPLE_LIMIT:
+                logger.warning("Aggregates unavailable for %s: %s", symbol, exc)
+            elif count == LOG_SAMPLE_LIMIT + 1:
+                logger.info("Aggregates unavailable for %s (suppressing repeats; %s occurrences)", symbol, count)
             continue
         price_frame = PriceRouter.aggregates_to_dataframe(bars)
         if price_frame.empty:
