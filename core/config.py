@@ -15,6 +15,24 @@ load_dotenv()
 ALPACA_API_KEY = os.getenv("APCA_API_KEY_ID")
 ALPACA_API_SECRET = os.getenv("APCA_API_SECRET_KEY")
 MODE = os.getenv("MODE", "paper")
+DEFAULT_TWITTER_ALLOWED_ACCOUNTS = [
+    "Benzinga",
+    "MarketWatch",
+    "WSJmarkets",
+    "ReutersBiz",
+    "Reuters",
+    "BreakingMarkets",
+    "federalreserve",
+    "BLS_gov",
+    "BEA_News",
+    "EconUS",
+    "bespokeinvest",
+    "unusual_whales",
+    "spotgamma",
+    "Barchart",
+    "Stocktwits",
+    "YahooFinance",
+]
 
 
 def _get_bool(name: str, default: bool) -> bool:
@@ -24,8 +42,25 @@ def _get_bool(name: str, default: bool) -> bool:
     return val.lower() in ("1", "true", "yes", "y")
 
 
+def _get_int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)))
+    except ValueError:
+        return default
+
+
+def _get_csv(name: str, default: list[str]) -> list[str]:
+    raw = os.getenv(name)
+    if not raw:
+        return default
+    parts = [item.strip().lstrip("@") for item in raw.split(",")]
+    parsed = [p for p in parts if p]
+    return parsed or default
+
+
 # Core sentiment/env toggles exposed for direct imports
 USE_SENTIMENT = _get_bool("USE_SENTIMENT", True)
+USE_TWITTER_NEWS = _get_bool("USE_TWITTER_NEWS", False)
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-3.5-turbo-16k")
 try:
     SENTIMENT_CACHE_TTL = int(os.getenv("SENTIMENT_CACHE_TTL", "300"))
@@ -54,6 +89,13 @@ class Settings:
     openai_model: str = field(default_factory=lambda: OPENAI_MODEL)
     use_sentiment: bool = field(default_factory=lambda: USE_SENTIMENT)
     sentiment_cache_ttl: int = field(default_factory=lambda: SENTIMENT_CACHE_TTL)
+    use_twitter_news: bool = field(default_factory=lambda: USE_TWITTER_NEWS)
+    twitter_bearer_token: str = field(default_factory=lambda: os.getenv("TWITTER_BEARER_TOKEN", ""))
+    twitter_allowed_accounts: list[str] = field(
+        default_factory=lambda: _get_csv("TWITTER_ALLOWED_ACCOUNTS", DEFAULT_TWITTER_ALLOWED_ACCOUNTS)
+    )
+    twitter_max_posts_per_day: int = field(default_factory=lambda: _get_int("TWITTER_MAX_POSTS_PER_DAY", 3))
+    twitter_tweets_per_account: int = field(default_factory=lambda: _get_int("TWITTER_TWEETS_PER_ACCOUNT", 1))
 
     universe_fallback_csv: Path = field(
         default_factory=lambda: Path(os.getenv("UNIVERSE_FALLBACK_CSV", "universe/fallback_universe.csv"))
@@ -90,4 +132,10 @@ def get_settings() -> Settings:
     logger.info("TWELVEDATA_API_KEY detected: %s", bool(settings.twelvedata_api_key))
     logger.info("ALPHAVANTAGE_API_KEY detected: %s", bool(settings.alphavantage_api_key))
     logger.info("OPENAI_API_KEY detected: %s", bool(settings.openai_api_key))
+    if settings.use_twitter_news:
+        logger.info(
+            "Twitter news enabled with %d allowed accounts; bearer token: %s",
+            len(settings.twitter_allowed_accounts),
+            bool(settings.twitter_bearer_token),
+        )
     return settings

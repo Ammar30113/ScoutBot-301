@@ -17,7 +17,7 @@ FALLBACK_MODELS = [
 client = OpenAI()
 
 
-def get_gpt_sentiment(symbol: str) -> float:
+def get_gpt_sentiment(symbol: str, news: list[str] | None = None) -> float:
     """
     Query GPT for a sentiment score in [-1, 1] for a stock symbol.
     Uses PRIMARY_MODEL then allowed fallbacks; handles permission errors
@@ -25,9 +25,21 @@ def get_gpt_sentiment(symbol: str) -> float:
     """
     models_to_try = [PRIMARY_MODEL] + FALLBACK_MODELS
 
+    news_block = ""
+    if news:
+        limited_news = [item.strip() for item in news if item.strip()][:5]
+        if limited_news:
+            formatted_news = "\n".join(f"- {item}" for item in limited_news)
+            news_block = (
+                "\nUse the following curated Twitter headlines as supplemental context only if helpful. "
+                "They are pre-filtered to the requested ticker:\n"
+                f"{formatted_news}\n"
+            )
+
     prompt = (
         f"Provide a sentiment score between -1 and 1 for the stock symbol {symbol} "
         f"based only on medium to long-term market perception and news, not on intraday price action. "
+        f"{news_block}"
         f"Return ONLY the number, no text."
     )
 

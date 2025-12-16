@@ -2,7 +2,8 @@ import time
 import logging
 from typing import Dict, Tuple
 
-from core.config import USE_SENTIMENT, SENTIMENT_CACHE_TTL
+from core.config import USE_SENTIMENT, USE_TWITTER_NEWS, SENTIMENT_CACHE_TTL
+from data.twitter_news import get_symbol_news
 from sentiment.gpt_provider import get_gpt_sentiment
 
 log = logging.getLogger(__name__)
@@ -36,7 +37,17 @@ def get_sentiment(symbol: str) -> float:
         else:
             log.info(f"sentiment.engine | Cache expired for {symbol}")
 
+    news_context = []
+    if USE_TWITTER_NEWS:
+        try:
+            news_context = get_symbol_news(symbol)
+            if news_context:
+                log.info("sentiment.engine | Twitter news attached for %s (%d items)", symbol, len(news_context))
+        except Exception as exc:  # pragma: no cover - defensive
+            log.warning("sentiment.engine | Twitter news unavailable for %s: %s", symbol, exc)
+            news_context = []
+
     # Fetch fresh sentiment from GPT
-    val = get_gpt_sentiment(symbol)
+    val = get_gpt_sentiment(symbol, news=news_context)
     _cache[symbol] = (time.time(), val)
     return val
