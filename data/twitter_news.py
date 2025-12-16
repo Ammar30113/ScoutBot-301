@@ -4,6 +4,7 @@ import json
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+import time
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -104,6 +105,7 @@ class TwitterNewsClient:
         self.max_posts_per_day = max(0, min(int(self.settings.twitter_max_posts_per_day), MONTHLY_POST_LIMIT))
         self.tweets_per_account = max(0, int(self.settings.twitter_tweets_per_account))
         self.quota = QuotaState.load()
+        self._rate_limit_until: float = 0.0
 
     def _remaining_daily(self) -> int:
         return max(0, self.max_posts_per_day - self.quota.day_count)
@@ -185,6 +187,20 @@ class TwitterNewsClient:
         url = f"{TWITTER_API_BASE}/users/{user_id}/tweets"
         try:
             resp = requests.get(url, headers=self._headers(), params=params, timeout=6)
+            if resp.status_code == 429:
+                reset_hint = resp.headers.get("x-rate-limit-reset")
+                cooldown_seconds = 900
+                if reset_hint:
+                    try:
+                        reset_at = int(reset_hint)
+                        cooldown_seconds = max(30, reset_at - int(time.time()))
+                    except Exception:
+                        pass
+                self._rate_limit_until = time.time() + cooldown_seconds
+                logger.info(
+                    "Twitter rate limit hit for user %s; cooling down for %ds", user_id, int(cooldown_seconds)
+                )
+                return []
             resp.raise_for_status()
             data = resp.json().get("data") or []
             logger.info("Twitter fetch for user %s returned %d tweets", user_id, len(data))
@@ -207,6 +223,13 @@ class TwitterNewsClient:
 
         try:
             self._reset_if_period_changed()
+            if self._rate_limit_until and time.time() < self._rate_limit_until:
+                logger.info(
+                    "Twitter rate limit active; skipping fetch until %s",
+                    datetime.fromtimestamp(self._rate_limit_until, tz=timezone.utc).isoformat(),
+                )
+                return []
+
             remaining_budget = self._remaining_budget()
             if remaining_budget <= 0:
                 logger.info("Twitter daily/monthly quota exhausted; skipping fetch")
@@ -230,6 +253,8 @@ class TwitterNewsClient:
                     continue
 
                 tweets = self._fetch_user_tweets(user_id, fetch_cap)
+                if self._rate_limit_until and time.time() < self._rate_limit_until:
+                    break
                 consumed = min(len(tweets), fetch_cap, self._remaining_budget())
                 if consumed:
                     self._update_quota(consumed, handle)
