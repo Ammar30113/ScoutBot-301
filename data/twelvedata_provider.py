@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Dict, List, Optional
 from collections import defaultdict
+import logging
+import time
 
 import requests
 
@@ -13,13 +15,16 @@ from core.cache import get_cache
 logger = get_logger(__name__)
 LOG_SAMPLE_LIMIT = 5
 _warn_counts: dict[str, int] = defaultdict(int)
+_NO_DATA = object()
+RATE_LIMIT_COOLDOWN = 60
+RATE_LIMIT_EXTENDED = 900
 
 
-def _warn_sample(reason: str, message: str) -> None:
+def _warn_sample(reason: str, message: str, *, level: int = logging.WARNING) -> None:
     count = _warn_counts[reason] + 1
     _warn_counts[reason] = count
     if count <= LOG_SAMPLE_LIMIT:
-        logger.warning(message)
+        logger.log(level, message)
     elif count == LOG_SAMPLE_LIMIT + 1:
         logger.info("%s (suppressing further repeats; %s occurrences)", message, count)
 
@@ -37,26 +42,94 @@ class TwelveDataProvider:
         self.api_key = settings.twelvedata_api_key
         self.cache = get_cache()
         self.ttl = settings.cache_ttl
+        self.no_data_ttl = max(60, min(int(self.ttl / 2) if self.ttl else 0, 900))
+        self._rate_limit_until = 0.0
         if not self.api_key:
             logger.warning("TwelveDataProvider initialized without API key")
+
+    def _rate_limited(self) -> bool:
+        return time.time() < self._rate_limit_until
+
+    def _set_rate_limit(self, seconds: int, reason: str) -> None:
+        until = time.time() + max(int(seconds), 1)
+        if until > self._rate_limit_until:
+            self._rate_limit_until = until
+            logger.warning("TwelveData rate limit: cooling down %ds (%s)", int(seconds), reason or "rate limit")
+
+    def _rate_limit_seconds(self, message: str) -> int:
+        msg = (message or "").lower()
+        if any(marker in msg for marker in ("per day", "daily", "monthly", "credits", "plan")):
+            return RATE_LIMIT_EXTENDED
+        return RATE_LIMIT_COOLDOWN
+
+    def _cache_no_data(self, cache_key: str) -> None:
+        cached = self.cache.get(cache_key)
+        if cached is not None and cached is not _NO_DATA:
+            return
+        self.cache.set(cache_key, _NO_DATA, self.no_data_ttl)
+
+    def _parse_error(self, payload: dict) -> tuple[Optional[str], str]:
+        if not isinstance(payload, dict):
+            return None, ""
+        status = str(payload.get("status") or "").lower()
+        message = str(payload.get("message") or payload.get("error") or "").strip()
+        code = payload.get("code")
+        if status != "error" and code is None and not message:
+            return None, ""
+        msg_lower = message.lower()
+        if code == 429 or any(marker in msg_lower for marker in ("rate limit", "per minute", "per day", "credits", "limit")):
+            return "rate_limit", message or str(code or "")
+        if "symbol" in msg_lower and any(marker in msg_lower for marker in ("not found", "invalid")):
+            return "no_data", message
+        if "no data" in msg_lower:
+            return "no_data", message
+        return "error", message
+
+    def _handle_payload_error(self, symbol: str, cache_key: str, context: str, payload: dict) -> bool:
+        err_type, message = self._parse_error(payload)
+        if not err_type:
+            return False
+        if err_type == "rate_limit":
+            cooldown = self._rate_limit_seconds(message)
+            self._set_rate_limit(cooldown, message)
+            return True
+        if err_type == "no_data":
+            _warn_sample(
+                f"{context}_no_data",
+                f"TwelveData {context} empty for {symbol}: {message}" if message else f"TwelveData {context} empty for {symbol}",
+                level=logging.INFO,
+            )
+            self._cache_no_data(cache_key)
+            return True
+        _warn_sample(
+            f"{context}_error",
+            f"TwelveData {context} error for {symbol}: {message}" if message else f"TwelveData {context} error for {symbol}",
+        )
+        return True
 
     def get_price(self, symbol: str) -> Optional[float]:
         cache_key = f"td:price:{symbol.upper()}"
         cached = self.cache.get(cache_key)
+        if cached is _NO_DATA:
+            return None
         if not self.api_key:
             return cached
+        if self._rate_limited():
+            return cached if cached is not None else None
         params = {"symbol": symbol.upper(), "apikey": self.api_key, "interval": "1min", "outputsize": 1}
         try:
             response = requests.get(f"{self.BASE_URL}/time_series", params=params, timeout=10)
             if response.status_code == 429:
-                logger.warning("TwelveData price rate-limited for %s", symbol)
-                return cached
+                self._set_rate_limit(RATE_LIMIT_COOLDOWN, "http 429")
+                return cached if cached is not None else None
             response.raise_for_status()
-            values = response.json().get("values", [])
+            payload = response.json() or {}
+            if self._handle_payload_error(symbol, cache_key, "price", payload):
+                return cached if cached is not None else None
+            values = payload.get("values", [])
             if not values:
-                if cached is not None:
-                    return cached
-                return None
+                self._cache_no_data(cache_key)
+                return cached if cached is not None else None
             price = float(values[0].get("close", 0.0))
             self.cache.set(cache_key, price, self.ttl)
             return price
@@ -67,7 +140,11 @@ class TwelveDataProvider:
     def get_aggregates(self, symbol: str, timespan: str = "1day", limit: int = 60) -> List[Dict[str, float]]:
         cache_key = f"td:{timespan}:{symbol.upper()}"
         cached = self.cache.get(cache_key) or []
+        if cached is _NO_DATA:
+            return []
         if not self.api_key:
+            return cached
+        if self._rate_limited():
             return cached
         interval = self._normalize_timespan(timespan)
         params = {
@@ -79,12 +156,16 @@ class TwelveDataProvider:
         try:
             response = requests.get(f"{self.BASE_URL}/time_series", params=params, timeout=10)
             if response.status_code == 429:
-                _warn_sample("aggregates_rate_limited", f"TwelveData aggregates rate-limited for {symbol}")
+                self._set_rate_limit(RATE_LIMIT_COOLDOWN, "http 429")
                 return cached
             response.raise_for_status()
-            values = response.json().get("values", []) or []
+            payload = response.json() or {}
+            if self._handle_payload_error(symbol, cache_key, "aggregates", payload):
+                return cached
+            values = payload.get("values", []) or []
             if not values:
-                _warn_sample("aggregates_empty", f"TwelveData aggregates empty for {symbol}")
+                _warn_sample("aggregates_empty", f"TwelveData aggregates empty for {symbol}", level=logging.INFO)
+                self._cache_no_data(cache_key)
                 return cached
         except Exception as exc:  # pragma: no cover - network guard
             _warn_sample("aggregates_failed", f"TwelveData aggregates failed for {symbol}: {exc}")
@@ -110,7 +191,11 @@ class TwelveDataProvider:
 
         cache_key = f"td:intraday1m:{symbol.upper()}"
         cached = self.cache.get(cache_key) or []
+        if cached is _NO_DATA:
+            return []
         if not self.api_key:
+            return cached
+        if self._rate_limited():
             return cached
         params = {
             "symbol": symbol.upper(),
@@ -121,12 +206,16 @@ class TwelveDataProvider:
         try:
             response = requests.get(f"{self.BASE_URL}/time_series", params=params, timeout=10)
             if response.status_code == 429:
-                _warn_sample("intraday_rate_limited", f"TwelveData intraday rate-limited for {symbol}")
+                self._set_rate_limit(RATE_LIMIT_COOLDOWN, "http 429")
                 return cached
             response.raise_for_status()
-            values = response.json().get("values", []) or []
+            payload = response.json() or {}
+            if self._handle_payload_error(symbol, cache_key, "intraday", payload):
+                return cached
+            values = payload.get("values", []) or []
             if not values:
-                _warn_sample("intraday_empty", f"TwelveData intraday aggregates empty for {symbol}")
+                _warn_sample("intraday_empty", f"TwelveData intraday aggregates empty for {symbol}", level=logging.INFO)
+                self._cache_no_data(cache_key)
                 return cached
         except Exception as exc:  # pragma: no cover - network guard
             _warn_sample("intraday_failed", f"TwelveData intraday aggregates failed for {symbol}: {exc}")
@@ -156,21 +245,26 @@ class TwelveDataProvider:
 
         cache_key = f"td:market_cap:{symbol.upper()}"
         cached = self.cache.get(cache_key)
+        if cached is _NO_DATA:
+            return 0.0
         if not self.api_key:
+            return cached if cached is not None else 0.0
+        if self._rate_limited():
             return cached if cached is not None else 0.0
         params = {"symbol": symbol.upper(), "apikey": self.api_key}
         try:
             response = requests.get(f"{self.BASE_URL}/profile", params=params, timeout=10)
             if response.status_code == 429:
-                logger.warning("TwelveData market cap rate-limited for %s", symbol)
+                self._set_rate_limit(RATE_LIMIT_COOLDOWN, "http 429")
                 return cached if cached is not None else 0.0
             response.raise_for_status()
             data = response.json() or {}
+            if self._handle_payload_error(symbol, cache_key, "market cap", data):
+                return cached if cached is not None else 0.0
             raw_cap = data.get("market_cap") or data.get("market_capitalization")
             if raw_cap is None:
-                if cached is not None:
-                    return cached
-                return 0.0
+                self._cache_no_data(cache_key)
+                return cached if cached is not None else 0.0
             value = float(raw_cap)
             self.cache.set(cache_key, value, self.ttl)
             return value
@@ -187,6 +281,8 @@ class TwelveDataProvider:
         results: Dict[str, List[Dict[str, float]]] = {}
         if not self.api_key or not symbols:
             return results
+        if self._rate_limited():
+            return results
         unique_symbols = list(dict.fromkeys(sym.upper() for sym in symbols))
         chunks = [unique_symbols[i : i + MULTI_SYMBOL_CHUNK] for i in range(0, len(unique_symbols), MULTI_SYMBOL_CHUNK)]
         for chunk in chunks:
@@ -198,12 +294,14 @@ class TwelveDataProvider:
         results: Dict[str, List[Dict[str, float]]] = {}
         if not symbols:
             return results
+        if self._rate_limited():
+            return results
         joined = ",".join(symbols)
         params = {"symbol": joined, "interval": "1day", "apikey": self.api_key, "outputsize": limit}
         try:
             response = requests.get(f"{self.BASE_URL}/time_series", params=params, timeout=10)
             if response.status_code == 429:
-                _warn_sample("batch_rate_limited", f"TwelveData batch daily bars rate-limited for {len(symbols)} symbols")
+                self._set_rate_limit(RATE_LIMIT_COOLDOWN, "http 429")
                 return results
             if response.status_code == 414:
                 _warn_sample("batch_uri_too_long", f"TwelveData batch request too long; chunk size={len(symbols)}")
@@ -216,9 +314,17 @@ class TwelveDataProvider:
 
         if not isinstance(data, dict):
             return results
+        if self._handle_payload_error(",".join(symbols), "td:1day:batch", "batch daily bars", data):
+            return results
         for sym, payload in data.items():
-            values = payload.get("values") if isinstance(payload, dict) else None
+            if not isinstance(payload, dict):
+                continue
+            sym_u = sym.upper()
+            if self._handle_payload_error(sym_u, f"td:1day:{sym_u}", "batch daily bars", payload):
+                continue
+            values = payload.get("values")
             if not values:
+                self._cache_no_data(f"td:1day:{sym_u}")
                 continue
             bars: List[Dict[str, float]] = []
             for row in reversed(values):
@@ -236,7 +342,6 @@ class TwelveDataProvider:
                 except Exception:
                     continue
             if bars:
-                sym_u = sym.upper()
                 results[sym_u] = bars
                 self.cache.set(f"td:1day:{sym_u}", bars, self.ttl)
         return results

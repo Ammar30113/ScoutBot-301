@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Dict, List, Optional
 from collections import defaultdict
+import logging
+import time
 
 import requests
 
@@ -13,13 +15,16 @@ from core.cache import get_cache
 logger = get_logger(__name__)
 LOG_SAMPLE_LIMIT = 5
 _warn_counts: dict[str, int] = defaultdict(int)
+_NO_DATA = object()
+RATE_LIMIT_COOLDOWN = 70
+RATE_LIMIT_EXTENDED = 900
 
 
-def _warn_sample(reason: str, message: str) -> None:
+def _warn_sample(reason: str, message: str, *, level: int = logging.WARNING) -> None:
     count = _warn_counts[reason] + 1
     _warn_counts[reason] = count
     if count <= LOG_SAMPLE_LIMIT:
-        logger.warning(message)
+        logger.log(level, message)
     elif count == LOG_SAMPLE_LIMIT + 1:
         logger.info("%s (suppressing further repeats; %s occurrences)", message, count)
 
@@ -32,27 +37,85 @@ class AlphaVantageProvider:
         self.api_key = settings.alphavantage_api_key
         self.cache = get_cache()
         self.ttl = settings.cache_ttl
+        self.no_data_ttl = max(60, min(int(self.ttl / 2) if self.ttl else 0, 900))
+        self._rate_limit_until = 0.0
         if not self.api_key:
             logger.warning("AlphaVantageProvider initialized without API key")
+
+    def _rate_limited(self) -> bool:
+        return time.time() < self._rate_limit_until
+
+    def _set_rate_limit(self, seconds: int, reason: str) -> None:
+        until = time.time() + max(int(seconds), 1)
+        if until > self._rate_limit_until:
+            self._rate_limit_until = until
+            logger.warning("AlphaVantage rate limit: cooling down %ds (%s)", int(seconds), reason or "rate limit")
+
+    def _rate_limit_seconds(self, message: str) -> int:
+        msg = (message or "").lower()
+        if any(marker in msg for marker in ("per day", "daily", "monthly", "premium", "limit")):
+            return RATE_LIMIT_EXTENDED
+        return RATE_LIMIT_COOLDOWN
+
+    def _cache_no_data(self, cache_key: str) -> None:
+        cached = self.cache.get(cache_key)
+        if cached is not None and cached is not _NO_DATA:
+            return
+        self.cache.set(cache_key, _NO_DATA, self.no_data_ttl)
+
+    def _parse_error(self, payload: dict) -> tuple[Optional[str], str]:
+        if not isinstance(payload, dict):
+            return None, ""
+        if "Note" in payload:
+            return "rate_limit", str(payload.get("Note") or "")
+        if "Information" in payload and "Thank you" in str(payload.get("Information") or ""):
+            return "rate_limit", str(payload.get("Information") or "")
+        if "Error Message" in payload:
+            return "no_data", str(payload.get("Error Message") or "")
+        if "Error" in payload:
+            return "no_data", str(payload.get("Error") or "")
+        return None, ""
+
+    def _handle_payload_error(self, symbol: str, cache_key: str, context: str, payload: dict) -> bool:
+        err_type, message = self._parse_error(payload)
+        if not err_type:
+            return False
+        if err_type == "rate_limit":
+            cooldown = self._rate_limit_seconds(message)
+            self._set_rate_limit(cooldown, message)
+            return True
+        _warn_sample(
+            f"{context}_no_data",
+            f"AlphaVantage {context} empty for {symbol}: {message}" if message else f"AlphaVantage {context} empty for {symbol}",
+            level=logging.INFO,
+        )
+        self._cache_no_data(cache_key)
+        return True
 
     def get_price(self, symbol: str) -> Optional[float]:
         cache_key = f"av:price:{symbol.upper()}"
         cached = self.cache.get(cache_key)
+        if cached is _NO_DATA:
+            return None
         if not self.api_key:
             return cached
+        if self._rate_limited():
+            return cached if cached is not None else None
         params = {"function": "GLOBAL_QUOTE", "symbol": symbol.upper(), "apikey": self.api_key}
         try:
             response = requests.get(self.BASE_URL, params=params, timeout=10)
             if response.status_code == 429:
-                logger.warning("AlphaVantage price rate-limited for %s", symbol)
-                return cached
+                self._set_rate_limit(RATE_LIMIT_COOLDOWN, "http 429")
+                return cached if cached is not None else None
             response.raise_for_status()
-            payload = response.json().get("Global Quote", {}) or {}
-            price = payload.get("05. price")
+            payload = response.json() or {}
+            if self._handle_payload_error(symbol, cache_key, "price", payload):
+                return cached if cached is not None else None
+            data = payload.get("Global Quote", {}) or {}
+            price = data.get("05. price")
             if price is None:
-                if cached is not None:
-                    return cached
-                return None
+                self._cache_no_data(cache_key)
+                return cached if cached is not None else None
             value = float(price)
             self.cache.set(cache_key, value, self.ttl)
             return value
@@ -63,18 +126,26 @@ class AlphaVantageProvider:
     def get_aggregates(self, symbol: str, timespan: str = "1day", limit: int = 60) -> List[Dict[str, float]]:
         cache_key = f"av:daily:{symbol.upper()}"
         cached = self.cache.get(cache_key) or []
+        if cached is _NO_DATA:
+            return []
         if not self.api_key:
+            return cached
+        if self._rate_limited():
             return cached
         params = {"function": "TIME_SERIES_DAILY_ADJUSTED", "symbol": symbol.upper(), "apikey": self.api_key}
         try:
             response = requests.get(self.BASE_URL, params=params, timeout=10)
             if response.status_code == 429:
-                _warn_sample("aggregates_rate_limited", f"AlphaVantage aggregates rate-limited for {symbol}")
+                self._set_rate_limit(RATE_LIMIT_COOLDOWN, "http 429")
                 return cached
             response.raise_for_status()
-            data = response.json().get("Time Series (Daily)", {}) or {}
+            payload = response.json() or {}
+            if self._handle_payload_error(symbol, cache_key, "aggregates", payload):
+                return cached
+            data = payload.get("Time Series (Daily)", {}) or {}
             if not data:
-                _warn_sample("aggregates_empty", f"AlphaVantage aggregates empty for {symbol}")
+                _warn_sample("aggregates_empty", f"AlphaVantage aggregates empty for {symbol}", level=logging.INFO)
+                self._cache_no_data(cache_key)
                 return cached
         except Exception as exc:  # pragma: no cover - network guard
             _warn_sample("aggregates_failed", f"AlphaVantage aggregates failed for {symbol}: {exc}")
@@ -101,7 +172,11 @@ class AlphaVantageProvider:
 
         cache_key = f"av:intraday5m:{symbol.upper()}"
         cached = self.cache.get(cache_key) or []
+        if cached is _NO_DATA:
+            return []
         if not self.api_key:
+            return cached
+        if self._rate_limited():
             return cached
         params = {
             "function": "TIME_SERIES_INTRADAY",
@@ -113,12 +188,16 @@ class AlphaVantageProvider:
         try:
             response = requests.get(self.BASE_URL, params=params, timeout=10)
             if response.status_code == 429:
-                _warn_sample("intraday_rate_limited", f"AlphaVantage intraday rate-limited for {symbol}")
+                self._set_rate_limit(RATE_LIMIT_COOLDOWN, "http 429")
                 return cached
             response.raise_for_status()
-            data = response.json().get("Time Series (5min)", {}) or {}
+            payload = response.json() or {}
+            if self._handle_payload_error(symbol, cache_key, "intraday", payload):
+                return cached
+            data = payload.get("Time Series (5min)", {}) or {}
             if not data:
-                _warn_sample("intraday_empty", f"AlphaVantage intraday aggregates empty for {symbol}")
+                _warn_sample("intraday_empty", f"AlphaVantage intraday aggregates empty for {symbol}", level=logging.INFO)
+                self._cache_no_data(cache_key)
                 return cached
         except Exception as exc:  # pragma: no cover - network guard
             _warn_sample("intraday_failed", f"AlphaVantage intraday aggregates failed for {symbol}: {exc}")
@@ -146,21 +225,26 @@ class AlphaVantageProvider:
 
         cache_key = f"av:market_cap:{symbol.upper()}"
         cached = self.cache.get(cache_key)
+        if cached is _NO_DATA:
+            return 0.0
         if not self.api_key:
+            return cached if cached is not None else 0.0
+        if self._rate_limited():
             return cached if cached is not None else 0.0
         params = {"function": "OVERVIEW", "symbol": symbol.upper(), "apikey": self.api_key}
         try:
             response = requests.get(self.BASE_URL, params=params, timeout=10)
             if response.status_code == 429:
-                _warn_sample("fundamentals_rate_limited", f"AlphaVantage fundamentals rate-limited for {symbol}")
+                self._set_rate_limit(RATE_LIMIT_COOLDOWN, "http 429")
                 return cached if cached is not None else 0.0
             response.raise_for_status()
             data = response.json() or {}
+            if self._handle_payload_error(symbol, cache_key, "market cap", data):
+                return cached if cached is not None else 0.0
             raw_cap = data.get("MarketCapitalization")
             if raw_cap is None:
-                if cached is not None:
-                    return cached
-                return 0.0
+                self._cache_no_data(cache_key)
+                return cached if cached is not None else 0.0
             value = float(raw_cap)
             self.cache.set(cache_key, value, self.ttl)
             return value
@@ -176,6 +260,8 @@ class AlphaVantageProvider:
 
         if not self.api_key or not symbols:
             return {}
+        if self._rate_limited():
+            return {}
         joined = ",".join(sorted(set(sym.upper() for sym in symbols)))
         cache_key = f"av:batch_quotes:{joined}"
         cached = self.cache.get(cache_key) or {}
@@ -183,12 +269,15 @@ class AlphaVantageProvider:
         try:
             response = requests.get(self.BASE_URL, params=params, timeout=10)
             if response.status_code == 429:
-                logger.warning("AlphaVantage batch quotes rate-limited for %s symbols", len(symbols))
+                self._set_rate_limit(RATE_LIMIT_COOLDOWN, "http 429")
                 return cached
             response.raise_for_status()
-            payload = response.json().get("Stock Quotes", []) or []
+            payload = response.json() or {}
+            if self._handle_payload_error("batch", cache_key, "batch quotes", payload):
+                return cached
+            quotes_payload = payload.get("Stock Quotes", []) or []
             quotes: Dict[str, float] = {}
-            for item in payload:
+            for item in quotes_payload:
                 sym = item.get("1. symbol")
                 price = item.get("2. price")
                 if sym and price is not None:
