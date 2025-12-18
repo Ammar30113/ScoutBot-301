@@ -11,6 +11,7 @@ from strategy.technicals import passes_entry_filter, compute_atr
 from strategy.ml_classifier import generate_predictions
 from strategy.reversal import compute_reversal_signal
 from strategy.sentiment_engine import get_symbol_sentiment
+from strategy.orb import find_orb_setups
 
 logger = logging.getLogger(__name__)
 price_router = PriceRouter()
@@ -18,15 +19,20 @@ settings = get_settings()
 
 
 def route_signals(universe: List[str], crash_mode: bool = False, context=None) -> List[Dict[str, float | str]]:
+    orb_signals = find_orb_setups(universe, crash_mode=crash_mode)
+    skip_symbols = {sig["symbol"] for sig in orb_signals}
+
     momentum = compute_momentum_scores(universe, top_k=0, crash_mode=crash_mode)
     momentum_map = {sym: score for sym, score in momentum}
 
     ml_preds = generate_predictions(universe, crash_mode=crash_mode)
-    signals: List[Dict[str, float | str]] = []
+    signals: List[Dict[str, float | str]] = list(orb_signals)
     max_rank = max(len(momentum_map), 1)
     rate_limited: set[str] = set()
 
     for symbol, prob, features in ml_preds:
+        if symbol in skip_symbols:
+            continue
         if symbol in rate_limited:
             continue
         time.sleep(0.05)  # stagger provider requests slightly for large universes (reduce API bursts)
@@ -164,8 +170,9 @@ def route_signals(universe: List[str], crash_mode: bool = False, context=None) -
                     "momentum_score": momentum_score,
                     "reason": "reversal",
                 }
-            )
+                )
         if crash_mode and len(signals) >= 3:
             logger.info("Crash mode signal cap reached (3); skipping remaining symbols")
             break
+    signals.sort(key=lambda item: float(item.get("score", 0.0)), reverse=True)
     return signals

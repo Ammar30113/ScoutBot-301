@@ -6,7 +6,7 @@ This repository contains a from-scratch rewrite of the Microcap Scout Bot. The n
 - **Market data router** prioritizes Alpaca → TwelveData → AlphaVantage with automatic failover.
 - **Universe engine** pulls S&P1500/Russell3000 candidates, filters by liquidity, volatility, market-cap, and price, and falls back to the bundled CSV snapshot when data is missing.
 - **ML classifier** (XGBoost) scores upside probability using momentum, volatility, sentiment, and liquidity inputs backed by the bundled `models/microcap_model.pkl` file.
-- **Strategies**: momentum breakout and mean-reversion snapback, merged via a signal router that enforces ATR-based take-profit/stop-loss targets.
+- **Strategies**: 5-minute Opening Range Breakout (volume-validated, morning only) plus momentum breakout and mean-reversion snapback, merged via a signal router that enforces ATR-based take-profit/stop-loss targets.
 - **Trader engine**: allocation, risk limits (max 10% position / 3% daily loss), Alpaca bracket orders, and persisted portfolio state.
 
 ## Repository Layout
@@ -47,6 +47,7 @@ Set the following variables inside Railway (or a local `.env` file – the proje
 | `MAX_POSITION_PCT` | Position cap per trade (default 0.10) |
 | `MAX_DAILY_LOSS_PCT` | Risk guardrails (default 0.03) |
 | `SCHEDULER_INTERVAL_SECONDS` | Re-run cadence (default 900) |
+| `DAILY_BUDGET_USD` | Per-day deployment budget for allocations (default 10000; raise to 150000 to mirror the ORB playbook) |
 
 ## Running Locally
 ```bash
