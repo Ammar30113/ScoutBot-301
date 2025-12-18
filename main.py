@@ -1,9 +1,10 @@
 import logging
 import time
-from datetime import datetime, time as dt_time
+from datetime import datetime, time as dt_time, timezone
 
 import pytz
 
+from core.config import get_settings
 from universe.universe_builder import get_universe
 from strategy.signal_router import route_signals
 from trader.allocation import allocate_positions
@@ -12,12 +13,14 @@ from trader import risk_model
 from data.price_router import PriceRouter
 from strategy.crash_detector import is_crash_mode
 from trader.pnl_tracker import update_daily_pnl
+from data.portfolio_state import sync_entry_timestamps
 from types import SimpleNamespace
 
 logging.basicConfig(level=logging.INFO, format="%Y-%m-%d %H:%M:%S | %(levelname)s | %(name)s | %(message)s")
 logger = logging.getLogger(__name__)
 price_router = PriceRouter()
 context = SimpleNamespace()
+settings = get_settings()
 
 
 def market_open_now() -> bool:
@@ -82,7 +85,12 @@ def microcap_cycle():
             execute_trades(filtered_allocations, crash_mode=crash)
 
             # Exit checks for existing positions
-            for pos in list_positions():
+            open_positions = list_positions()
+            entry_ts_map = sync_entry_timestamps(
+                [pos.symbol for pos in open_positions],
+                datetime.now(timezone.utc).timestamp(),
+            )
+            for pos in open_positions:
                 try:
                     current_price = float(pos.current_price)
                     entry_price = float(pos.avg_entry_price)
@@ -92,7 +100,7 @@ def microcap_cycle():
                     "symbol": pos.symbol,
                     "current_price": current_price,
                     "entry_price": entry_price,
-                    "open_date": getattr(pos, "current_price_timestamp", None) or None,
+                    "entry_timestamp": entry_ts_map.get(pos.symbol),
                 }
                 if risk_model.should_exit(position_payload, crash_mode=crash):
                     close_position(pos.symbol)
@@ -105,7 +113,8 @@ def microcap_cycle():
             logger.exception("Cycle failed: %s", exc)
         finally:
             elapsed = time.time() - start
-            sleep_for = max(300 - elapsed, 0)
+            interval = max(settings.scheduler_interval_seconds, 1)
+            sleep_for = max(interval - elapsed, 0)
             time.sleep(sleep_for)
 
 

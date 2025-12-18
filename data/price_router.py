@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from typing import Dict, List, Sequence
 
 import pandas as pd
@@ -47,6 +48,11 @@ def _build_providers() -> Sequence[object]:
 
     providers: list[object] = []
 
+    if settings.alpaca_api_key and settings.alpaca_api_secret:
+        providers.append(AlpacaProvider())
+    else:
+        logger.info("PriceRouter: Alpaca disabled (missing API credentials)")
+
     if settings.twelvedata_api_key:
         providers.append(TwelveDataProvider())
     else:
@@ -56,11 +62,6 @@ def _build_providers() -> Sequence[object]:
         providers.append(AlphaVantageProvider())
     else:
         logger.info("PriceRouter: AlphaVantage disabled (missing ALPHAVANTAGE_API_KEY)")
-
-    if settings.alpaca_api_key and settings.alpaca_api_secret:
-        providers.append(AlpacaProvider())
-    else:
-        logger.info("PriceRouter: Alpaca disabled (missing API credentials)")
 
     logger.info("PriceRouter active providers: %s", [p.__class__.__name__ for p in providers])
     _providers_cache = providers
@@ -106,17 +107,18 @@ class PriceRouter:
 
     def get_aggregates(self, symbol: str, window: int = 60) -> List[Dict[str, float]]:
         """
-        Return last ``window`` minutes of 5-minute bars.
+        Return 5-minute bars covering the last ``window`` minutes.
         Provider priority: Alpaca → TwelveData → AlphaVantage.
         """
 
         last_error: Exception | None = None
+        bars_needed = max(int(math.ceil(window / 5)), 1)
         for provider in self.providers:
             provider_name = provider.__class__.__name__
             try:
                 frame: pd.DataFrame
                 if isinstance(provider, AlphaVantageProvider):
-                    bars = provider.get_intraday_5m(symbol, limit=window)
+                    bars = provider.get_intraday_5m(symbol, limit=bars_needed)
                     frame = resample_to_5m(bars)
                 elif isinstance(provider, TwelveDataProvider):
                     bars = provider.get_intraday_1m(symbol, limit=window)

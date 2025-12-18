@@ -7,6 +7,7 @@ from alpaca.trading.requests import MarketOrderRequest, StopLossRequest, TakePro
 
 from core.config import get_settings
 from data.price_router import PriceRouter
+from data.portfolio_state import set_entry_timestamp
 from trader.risk_model import stop_loss_price, take_profit_price
 
 logger = logging.getLogger(__name__)
@@ -80,12 +81,7 @@ def execute_trades(allocations, crash_mode: bool = False):
         )
         try:
             submitted_order = trading_client.submit_order(order)
-            try:
-                if getattr(submitted_order, "status", "").lower() == "filled":
-                    # NEW: store real entry timestamp
-                    setattr(submitted_order, "entry_timestamp", datetime.now(timezone.utc).timestamp())
-            except Exception:
-                pass
+            set_entry_timestamp(symbol, datetime.now(timezone.utc).timestamp())
         except Exception as exc:  # pragma: no cover - network guard
             logger.warning("Order failed for %s: %s", symbol, exc)
             continue
