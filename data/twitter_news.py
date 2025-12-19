@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import time
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -18,7 +18,11 @@ logger = get_logger(__name__)
 TWITTER_API_BASE = "https://api.twitter.com/2"
 MONTHLY_POST_LIMIT = 100
 QUOTA_STATE_PATH = Path("data/twitter_quota.json")
+USER_ID_CACHE_PATH = Path("data/twitter_user_ids.json")
 USER_ID_CACHE: Dict[str, Optional[str]] = {}
+USER_ID_NEGATIVE_UNTIL: Dict[str, float] = {}
+USER_ID_NEGATIVE_TTL = 3600
+_USER_ID_CACHE_LOADED = False
 
 
 def _today() -> str:
@@ -32,6 +36,53 @@ def _current_month() -> str:
 
 def _normalize_handle(handle: str) -> str:
     return handle.strip().lstrip("@")
+
+
+def _next_utc_midnight_timestamp() -> float:
+    now = datetime.now(timezone.utc)
+    next_midnight = datetime(now.year, now.month, now.day, tzinfo=timezone.utc) + timedelta(days=1)
+    return next_midnight.timestamp()
+
+
+def _load_user_id_cache() -> None:
+    global _USER_ID_CACHE_LOADED
+    if _USER_ID_CACHE_LOADED:
+        return
+    _USER_ID_CACHE_LOADED = True
+    if not USER_ID_CACHE_PATH.exists():
+        return
+    try:
+        raw = json.loads(USER_ID_CACHE_PATH.read_text())
+    except Exception:
+        return
+    if not isinstance(raw, dict):
+        return
+    for handle, user_id in raw.items():
+        if not user_id:
+            continue
+        key = _normalize_handle(str(handle)).lower()
+        USER_ID_CACHE[key] = str(user_id)
+
+
+def _persist_user_id_cache() -> None:
+    payload = {handle: user_id for handle, user_id in USER_ID_CACHE.items() if user_id}
+    if not payload:
+        return
+    USER_ID_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        USER_ID_CACHE_PATH.write_text(json.dumps(payload))
+    except Exception:
+        logger.warning("Twitter user ID cache could not be written; continuing without persistence")
+
+
+def _negative_cache_active(handle: str) -> bool:
+    until = USER_ID_NEGATIVE_UNTIL.get(handle)
+    if not until:
+        return False
+    if time.time() >= until:
+        USER_ID_NEGATIVE_UNTIL.pop(handle, None)
+        return False
+    return True
 
 
 def _mentions_symbol(text: str, symbol: str) -> bool:
@@ -106,6 +157,8 @@ class TwitterNewsClient:
         self.tweets_per_account = max(0, int(self.settings.twitter_tweets_per_account))
         self.quota = QuotaState.load()
         self._rate_limit_until: float = 0.0
+        if self.enabled:
+            _load_user_id_cache()
 
     def _remaining_daily(self) -> int:
         return max(0, self.max_posts_per_day - self.quota.day_count)
@@ -148,31 +201,59 @@ class TwitterNewsClient:
     def _headers(self) -> Dict[str, str]:
         return {"Authorization": f"Bearer {self.settings.twitter_bearer_token}"}
 
+    def _cooldown_until_next_day(self, reason: str) -> None:
+        until = _next_utc_midnight_timestamp()
+        if until > self._rate_limit_until:
+            self._rate_limit_until = until
+            logger.warning(
+                "Twitter rate limit hit; cooling down until %s (%s)",
+                datetime.fromtimestamp(until, tz=timezone.utc).isoformat(),
+                reason,
+            )
+
     def _resolve_user_id(self, handle: str) -> Optional[str]:
         key = handle.lower()
         if key in USER_ID_CACHE:
             return USER_ID_CACHE[key]
+        if self._rate_limit_until and time.time() < self._rate_limit_until:
+            return None
+        if _negative_cache_active(key):
+            return None
 
         url = f"{TWITTER_API_BASE}/users/by/username/{handle}"
         try:
             resp = requests.get(url, headers=self._headers(), timeout=5)
+            if resp.status_code == 429:
+                self._cooldown_until_next_day("user lookup 429")
+                return None
             resp.raise_for_status()
             payload = resp.json().get("data") or {}
             user_id = payload.get("id")
-            USER_ID_CACHE[key] = user_id
             if user_id:
+                USER_ID_CACHE[key] = user_id
+                _persist_user_id_cache()
                 logger.info("Twitter user resolved: @%s -> %s", handle, user_id)
             else:
                 logger.warning("Twitter user ID missing for @%s", handle)
+                USER_ID_NEGATIVE_UNTIL[key] = time.time() + USER_ID_NEGATIVE_TTL
             return user_id
         except Exception as exc:  # pragma: no cover - network guard
+            if isinstance(exc, requests.HTTPError):
+                resp = getattr(exc, "response", None)
+                if resp is not None and resp.status_code == 429:
+                    self._cooldown_until_next_day("user lookup 429")
+                    return None
             logger.warning("Twitter user resolution failed for @%s: %s", handle, exc)
-            USER_ID_CACHE[key] = None
+            USER_ID_NEGATIVE_UNTIL[key] = time.time() + USER_ID_NEGATIVE_TTL
             return None
 
     def _resolve_all_ids(self) -> Dict[str, str]:
         ids: Dict[str, str] = {}
+        if self._rate_limit_until and time.time() < self._rate_limit_until:
+            return ids
         for handle in self.allowed_accounts:
+            if self._rate_limit_until and time.time() < self._rate_limit_until:
+                break
             user_id = self._resolve_user_id(handle)
             if user_id:
                 ids[handle] = user_id
@@ -186,20 +267,11 @@ class TwitterNewsClient:
         }
         url = f"{TWITTER_API_BASE}/users/{user_id}/tweets"
         try:
+            if self._rate_limit_until and time.time() < self._rate_limit_until:
+                return []
             resp = requests.get(url, headers=self._headers(), params=params, timeout=6)
             if resp.status_code == 429:
-                reset_hint = resp.headers.get("x-rate-limit-reset")
-                cooldown_seconds = 900
-                if reset_hint:
-                    try:
-                        reset_at = int(reset_hint)
-                        cooldown_seconds = max(30, reset_at - int(time.time()))
-                    except Exception:
-                        pass
-                self._rate_limit_until = time.time() + cooldown_seconds
-                logger.info(
-                    "Twitter rate limit hit for user %s; cooling down for %ds", user_id, int(cooldown_seconds)
-                )
+                self._cooldown_until_next_day("tweets 429")
                 return []
             resp.raise_for_status()
             data = resp.json().get("data") or []

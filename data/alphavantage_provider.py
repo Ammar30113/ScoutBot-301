@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 from collections import defaultdict
 import logging
@@ -17,7 +17,6 @@ LOG_SAMPLE_LIMIT = 5
 _warn_counts: dict[str, int] = defaultdict(int)
 _NO_DATA = object()
 RATE_LIMIT_COOLDOWN = 70
-RATE_LIMIT_EXTENDED = 900
 
 
 def _warn_sample(reason: str, message: str, *, level: int = logging.WARNING) -> None:
@@ -53,9 +52,23 @@ class AlphaVantageProvider:
 
     def _rate_limit_seconds(self, message: str) -> int:
         msg = (message or "").lower()
-        if any(marker in msg for marker in ("per day", "daily", "monthly", "premium", "limit")):
-            return RATE_LIMIT_EXTENDED
+        if any(marker in msg for marker in ("month", "monthly")):
+            return self._seconds_until_next_month()
+        if any(marker in msg for marker in ("per day", "daily", "day", "premium", "limit")):
+            return self._seconds_until_next_day()
         return RATE_LIMIT_COOLDOWN
+
+    def _seconds_until_next_day(self) -> int:
+        now = datetime.now(timezone.utc)
+        next_midnight = datetime(now.year, now.month, now.day, tzinfo=timezone.utc) + timedelta(days=1)
+        return max(int((next_midnight - now).total_seconds()), RATE_LIMIT_COOLDOWN)
+
+    def _seconds_until_next_month(self) -> int:
+        now = datetime.now(timezone.utc)
+        year = now.year + (1 if now.month == 12 else 0)
+        month = 1 if now.month == 12 else now.month + 1
+        next_month = datetime(year, month, 1, tzinfo=timezone.utc)
+        return max(int((next_month - now).total_seconds()), RATE_LIMIT_COOLDOWN)
 
     def _cache_no_data(self, cache_key: str) -> None:
         cached = self.cache.get(cache_key)
