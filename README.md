@@ -1,29 +1,29 @@
-# Microcap Scout Bot — ML + Multi-Provider Trading Engine
+# Microcap Scout Bot - ML + Multi-Provider Trading Engine
 
-This repository contains a from-scratch rewrite of the Microcap Scout Bot. The new system discards the legacy dependencies and introduces an AI-driven, multi-provider market data and trading stack tuned for Railway deployments.
+This repository contains a from-scratch rewrite of the Microcap Scout Bot. The system uses a multi-provider market-data stack, an intraday ML classifier, and a signal router tuned for small-cap momentum workflows.
 
 ## Highlights
-- **Market data router** prioritizes Alpaca → TwelveData → AlphaVantage with automatic failover.
-- **Universe engine** pulls S&P1500/Russell3000 candidates, filters by liquidity, volatility, market-cap, and price, and falls back to the bundled CSV snapshot when data is missing.
-- **ML classifier** (XGBoost) scores upside probability using momentum, volatility, sentiment, and liquidity inputs backed by the bundled `models/microcap_model.pkl` file.
-- **Strategies**: 5-minute Opening Range Breakout (volume-validated, morning only) plus momentum breakout and mean-reversion snapback, merged via a signal router that enforces ATR-based take-profit/stop-loss targets.
-- **Trader engine**: allocation, risk limits (max 10% position / 3% daily loss), Alpaca bracket orders, and persisted portfolio state.
+- **Market data router** prioritizes Alpaca -> TwelveData -> AlphaVantage for prices/intraday; daily bars use TwelveData/AlphaVantage with caching + rate-limit backoff.
+- **Universe engine** loads CSV candidates (Russell3000 + fallback), filters by liquidity, ATR%, price, and market cap, with optional partial fundamentals/ATR.
+- **ML classifier** (XGBoost) saved at `models/momentum_sentiment_model.pkl` predicts next-bar upside from 5-minute features (RSI, MACD, VWAP diff, slope, volume ratio, ATR, ATR-band position).
+- **Strategies**: 5-minute ORB (morning only), momentum breakout, reversal; router blends ML prob, momentum rank, sentiment, and P&L penalty.
+- **Trader engine**: DAILY_BUDGET allocations, caps via `MAX_POSITIONS`/`MAX_POSITION_SIZE`, Alpaca bracket orders, time-stop + technical exits, crash mode triggered on SPY 5-min drop >= 1%.
 
 ## Repository Layout
 ```
-microcap-scout-bot/
-├── core/                # configuration, logging, scheduler utilities
-├── data/                # market-data providers + price router
-├── universe/            # universe building via liquidity/vol/market-cap filters + CSV fallback
-├── strategy/            # ML classifier + trading strategies + signal router
-├── trader/              # allocation, risk, order execution, and portfolio state
-├── models/              # microcap_model.pkl placeholder (trained on mock data)
-├── main.py              # orchestrates the full pipeline + scheduler
-└── requirements.txt
+ScoutBot-301/
+|-- core/                # configuration, logging, scheduler utilities
+|-- data/                # market-data providers + price router
+|-- universe/            # universe building via liquidity/vol/market-cap filters + CSV fallback
+|-- strategy/            # ML classifier + trading strategies + signal router
+|-- trader/              # allocation, risk, order execution, and portfolio state
+|-- models/              # auto-trained XGBoost model (momentum_sentiment_model.pkl)
+|-- main.py              # orchestrates the full pipeline + scheduler
+`-- requirements.txt
 ```
 
 ## Environment Variables
-Set the following variables inside Railway (or a local `.env` file – the project loads them via `python-dotenv`):
+Set the following variables inside Railway (or a local `.env` file - the project loads them via `python-dotenv`):
 
 | Variable | Description |
 |----------|-------------|
@@ -34,20 +34,30 @@ Set the following variables inside Railway (or a local `.env` file – the proje
 | `TWELVEDATA_API_KEY` | Optional fallback data |
 | `ALPHAVANTAGE_API_KEY` | Optional fallback data |
 | `OPENAI_API_KEY` | Required for GPT sentiment engine |
-| `OPENAI_MODEL` | Optional model override for sentiment (default `gpt-3.5-turbo-16k`) |
+| `OPENAI_MODEL` | Primary model for sentiment (default `gpt-3.5-turbo-16k`) |
 | `USE_SENTIMENT` | Toggle sentiment system (default `true`) |
+| `USE_TWITTER_NEWS` | Toggle Twitter headlines in sentiment (default `false`) |
+| `TWITTER_BEARER_TOKEN` | Required if `USE_TWITTER_NEWS=true` |
+| `TWITTER_ALLOWED_ACCOUNTS` | Comma-separated handles to scan (defaults in `core/config.py`) |
+| `TWITTER_MAX_POSTS_PER_DAY` | Daily tweet budget (default `3`) |
+| `TWITTER_TWEETS_PER_ACCOUNT` | Max tweets per account per day (default `1`) |
 | `SENTIMENT_CACHE_TTL` | Sentiment cache TTL seconds (default `300`) |
-| `MIN_DOLLAR_VOLUME` | Min avg daily dollar volume last 10 days (default 8000000) |
-| `MIN_MKT_CAP` | Min market cap filter (default 300000000) |
-| `MAX_MKT_CAP` | Max market cap filter (default 5000000000) |
-| `MIN_PRICE` | Min price filter (default 2) |
-| `MAX_PRICE` | Max price filter (default 80) |
-| `MAX_UNIVERSE_SIZE` | Max symbols returned (default 50) |
-| `INITIAL_EQUITY` | Portfolio equity baseline (default 100000) |
-| `MAX_POSITION_PCT` | Position cap per trade (default 0.10) |
-| `MAX_DAILY_LOSS_PCT` | Risk guardrails (default 0.03) |
-| `SCHEDULER_INTERVAL_SECONDS` | Re-run cadence (default 900) |
-| `DAILY_BUDGET_USD` | Per-day deployment budget for allocations (default 10000; raise to 150000 to mirror the ORB playbook) |
+| `UNIVERSE_FALLBACK_CSV` | CSV fallback path (default `universe/fallback_universe.csv`) |
+| `MIN_DOLLAR_VOLUME` | Min avg daily dollar volume (default `8000000`) |
+| `MIN_VOLUME_HISTORY_DAYS` | Lookback days for dollar-volume filter (default `3`) |
+| `MIN_MKT_CAP` | Min market cap filter (default `300000000`) |
+| `MAX_MKT_CAP` | Max market cap filter (default `5000000000`) |
+| `MIN_PRICE` | Min price filter (default `2`) |
+| `MAX_PRICE` | Max price filter (default `80`) |
+| `MAX_UNIVERSE_SIZE` | Max symbols returned (default `50`) |
+| `ALLOW_PARTIAL_FUNDAMENTALS` | Allow symbols with missing market cap (default `true`) |
+| `ALLOW_PARTIAL_ATR` | Allow symbols with missing ATR (default `true`) |
+| `DAILY_BUDGET_USD` | Per-cycle allocation budget (default `10000`) |
+| `MAX_POSITIONS` | Max open positions (default `5`) |
+| `MAX_POSITION_SIZE` | Max notional per position (defaults to DAILY_BUDGET/3) |
+| `SCHEDULER_INTERVAL_SECONDS` | Re-run cadence (default `900`) |
+| `PORTFOLIO_STATE_PATH` | JSON state path (default `data/portfolio_state.json`) |
+| `CACHE_TTL` | Price cache TTL seconds (default `900`) |
 
 ## Running Locally
 ```bash
@@ -63,19 +73,14 @@ python main.py
 3. Railway executes `python main.py` which boots the scheduler, builds the universe, generates ML signals, and routes orders through Alpaca.
 
 ## Notes
-- The bundled ML model ships as a placeholder trained on synthetic data. For production, retrain `models/microcap_model.pkl` with historical features + outcomes.
+- The ML model auto-trains on first run from recent intraday data and is cached at `models/momentum_sentiment_model.pkl`. If no market data is available, it falls back to a synthetic model; consider retraining offline for production.
 
 ## Sentiment (GPT-only)
 - `OPENAI_API_KEY`: OpenAI project key with permission to call chat models.
-- `OPENAI_MODEL`: Primary model for sentiment. Default: `gpt-3.5-turbo-16k`. Allowed for this project: `gpt-3.5-turbo-16k`, `gpt-4o-2024-05-13`, `gpt-4.1-2025-04-14`, `gpt-5`.
+- `OPENAI_MODEL`: Primary model for sentiment (default `gpt-3.5-turbo-16k`). Fallbacks: `gpt-4o-2024-05-13`, `gpt-5`.
 - `USE_SENTIMENT`: If false, sentiment is skipped and treated as 0.
 - `SENTIMENT_CACHE_TTL`: Per-symbol cache TTL (seconds). Default: `300`.
+- `USE_TWITTER_NEWS` / `TWITTER_BEARER_TOKEN`: Optional Twitter headlines from whitelisted accounts.
 
-P/L Tracking (Hybrid)
----------------------
-P/L is logged once per trading day into `data/pnl/YYYY-MM-DD.json`.
-
-Env variables needed:
-- `APCA_API_KEY_ID`
-- `APCA_API_SECRET_KEY`
-- `MODE` (`paper` or `live`)
+## P/L Tracking
+P/L, equity baseline, and entry timestamps are stored in `data/portfolio_state.json` (or `PORTFOLIO_STATE_PATH`) and updated each cycle when the Alpaca client is available.
