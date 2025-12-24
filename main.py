@@ -25,10 +25,21 @@ settings = get_settings()
 
 def market_open_now() -> bool:
     est = pytz.timezone("America/New_York")
-    now = datetime.now(est).time()
+    now = datetime.now(est)
+    if now.weekday() >= 5:
+        return False
+    if trading_client is not None:
+        try:
+            clock = trading_client.get_clock()
+            is_open = getattr(clock, "is_open", None)
+            if is_open is not None:
+                return bool(is_open)
+        except Exception as exc:  # pragma: no cover - network guard
+            logger.warning("Market clock unavailable; falling back to local time: %s", exc)
+    now_time = now.time()
     market_open = dt_time(9, 30)
     market_close = dt_time(16, 0)
-    return market_open <= now <= market_close
+    return market_open <= now_time <= market_close
 
 
 def microcap_cycle():

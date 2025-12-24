@@ -14,11 +14,22 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 price_router = PriceRouter()
 
-if settings.alpaca_api_key and settings.alpaca_api_secret:
+_base_url = (settings.alpaca_base_url or "").lower()
+_mode = settings.trading_mode or "paper"
+_is_live = _mode == "live" or ("paper" not in _base_url)
+
+if _is_live and not settings.allow_live_trading:
+    trading_client = None
+    logger.error(
+        "Live trading blocked: set ALLOW_LIVE_TRADING=true to enable live execution (MODE=%s, ALPACA_API_BASE_URL=%s)",
+        settings.trading_mode,
+        settings.alpaca_base_url,
+    )
+elif settings.alpaca_api_key and settings.alpaca_api_secret:
     trading_client = TradingClient(
         settings.alpaca_api_key,
         settings.alpaca_api_secret,
-        paper="paper" in settings.alpaca_base_url,
+        paper=not _is_live,
     )
 else:
     trading_client = None

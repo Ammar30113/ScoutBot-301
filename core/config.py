@@ -78,6 +78,8 @@ class Settings:
     )
     alpaca_base_url: str = field(default_factory=lambda: os.getenv("ALPACA_API_BASE_URL", "https://paper-api.alpaca.markets"))
     alpaca_data_url: str = field(default_factory=lambda: os.getenv("ALPACA_API_DATA_URL", "https://data.alpaca.markets/v2"))
+    trading_mode: str = field(default_factory=lambda: os.getenv("MODE", "paper").lower())
+    allow_live_trading: bool = field(default_factory=lambda: _get_bool("ALLOW_LIVE_TRADING", False))
 
     twelvedata_api_key: str = field(default_factory=lambda: os.getenv("TWELVEDATA_API_KEY") or os.getenv("TWELVEDATA_KEY", ""))
     alphavantage_api_key: str = field(
@@ -132,6 +134,7 @@ def get_settings() -> Settings:
     logger.info("TWELVEDATA_API_KEY detected: %s", bool(settings.twelvedata_api_key))
     logger.info("ALPHAVANTAGE_API_KEY detected: %s", bool(settings.alphavantage_api_key))
     logger.info("OPENAI_API_KEY detected: %s", bool(settings.openai_api_key))
+    logger.info("Trading mode=%s allow_live_trading=%s", settings.trading_mode, settings.allow_live_trading)
     if settings.use_twitter_news:
         logger.info(
             "Twitter news enabled with %d allowed accounts; bearer token: %s",
