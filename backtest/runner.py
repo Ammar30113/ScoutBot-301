@@ -93,27 +93,36 @@ class BacktestRunner:
             self.feed.set_cursor(cursor)
             crash, _ = is_crash_mode()
             context.pnl_penalty = pnl_tracker.update(cursor, broker.equity())
+            trade_allowed = not risk_model.daily_loss_exceeded(pnl_tracker.equity_return_pct)
 
-            signals = route_signals(self.symbols, crash_mode=crash, context=context)
-            allocations = allocate_positions(signals, crash_mode=crash)
+            if trade_allowed:
+                signals = route_signals(self.symbols, crash_mode=crash, context=context)
+                allocations = allocate_positions(signals, crash_mode=crash)
 
-            filtered: Dict[str, int] = {}
-            open_count = len(broker.positions)
-            for symbol, shares in allocations.items():
-                try:
-                    price = router.get_price(symbol)
-                except Exception:
-                    continue
-                notional = float(shares) * float(price)
-                if risk_model.can_open_position(open_count + len(filtered), notional, crash_mode=crash):
-                    filtered[symbol] = shares
+                filtered: Dict[str, int] = {}
+                open_count = len(broker.positions)
+                equity_value = broker.equity()
+                for symbol, shares in allocations.items():
+                    try:
+                        price = router.get_price(symbol)
+                    except Exception:
+                        continue
+                    notional = float(shares) * float(price)
+                    if risk_model.can_open_position(
+                        open_count + len(filtered),
+                        notional,
+                        crash_mode=crash,
+                        equity=equity_value,
+                        equity_return_pct=pnl_tracker.equity_return_pct,
+                    ):
+                        filtered[symbol] = shares
 
-            for symbol, shares in filtered.items():
-                try:
-                    price = router.get_price(symbol)
-                except Exception:
-                    continue
-                broker.open_position(symbol, shares, price, cursor)
+                for symbol, shares in filtered.items():
+                    try:
+                        price = router.get_price(symbol)
+                    except Exception:
+                        continue
+                    broker.open_position(symbol, shares, price, cursor)
 
             price_map = {}
             for symbol in list(broker.positions.keys()):

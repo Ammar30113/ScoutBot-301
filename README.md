@@ -31,6 +31,8 @@ Set the following variables inside Railway (or a local `.env` file - the project
 | `APCA_API_SECRET_KEY` / `ALPACA_API_SECRET` | Alpaca secret |
 | `ALPACA_API_BASE_URL` | Default `https://paper-api.alpaca.markets` |
 | `ALPACA_API_DATA_URL` | Default `https://data.alpaca.markets/v2` |
+| `MODE` | Trading mode (`paper` or `live`, default `paper`) |
+| `ALLOW_LIVE_TRADING` | Explicitly enable live trading (default `false`) |
 | `TWELVEDATA_API_KEY` | Optional fallback data |
 | `ALPHAVANTAGE_API_KEY` | Optional fallback data |
 | `OPENAI_API_KEY` | Required for GPT sentiment engine |

@@ -52,12 +52,24 @@ def microcap_cycle():
             # Compute P&L once per cycle
             pnl_state = update_daily_pnl(trading_client)
             pnl_penalty = 0.0
+            equity_return_pct = None
+            equity_value = None
+            trade_allowed = True
 
             if pnl_state:
+                equity_return_pct = pnl_state.equity_return_pct
+                equity_value = pnl_state.equity
                 if pnl_state.equity_return_pct < -0.01:
                     pnl_penalty = 0.05
                 elif pnl_state.equity_return_pct > 0.02:
                     pnl_penalty = -0.03
+                if risk_model.daily_loss_exceeded(pnl_state.equity_return_pct):
+                    trade_allowed = False
+                    logger.warning(
+                        "Daily loss limit reached (return %.3f <= -%.3f); blocking new entries",
+                        pnl_state.equity_return_pct,
+                        settings.max_daily_loss_pct,
+                    )
 
             # Pass penalty into signal router
             context.pnl_penalty = pnl_penalty
@@ -66,34 +78,41 @@ def microcap_cycle():
             logger.info("Crash mode = %s (SPY 5min drop = %.3f)", crash, drop)
             logger.info("=== Crash Mode %s ===", "ACTIVE" if crash else "OFF")
 
-            universe = get_universe()
-            if not universe:
-                logger.info("Universe empty; skipping cycle")
-                continue
-
-            signals = route_signals(universe, crash_mode=crash, context=context)
-            if not signals:
-                logger.info("No signals generated; skipping allocations")
-                continue
-            allocations = allocate_positions(signals, crash_mode=crash)
-
-            # Enforce max position caps before submitting
-            filtered_allocations = {}
-            open_positions = list_positions()
-            open_count = len(open_positions)
-            for symbol, shares in allocations.items():
-                try:
-                    price = price_router.get_price(symbol)
-                except Exception as exc:  # pragma: no cover - network guard
-                    logger.warning("Skipping %s for risk check; price unavailable: %s", symbol, exc)
+            if trade_allowed:
+                universe = get_universe()
+                if not universe:
+                    logger.info("Universe empty; skipping cycle")
                     continue
-                notional = shares * price
-                if risk_model.can_open_position(open_count + len(filtered_allocations), notional, crash_mode=crash):
-                    filtered_allocations[symbol] = shares
-                else:
-                    logger.info("Risk cap blocked %s (notional %.2f)", symbol, notional)
 
-            execute_trades(filtered_allocations, crash_mode=crash)
+                signals = route_signals(universe, crash_mode=crash, context=context)
+                if not signals:
+                    logger.info("No signals generated; skipping allocations")
+                    continue
+                allocations = allocate_positions(signals, crash_mode=crash)
+
+                # Enforce max position caps before submitting
+                filtered_allocations = {}
+                open_positions = list_positions()
+                open_count = len(open_positions)
+                for symbol, shares in allocations.items():
+                    try:
+                        price = price_router.get_price(symbol)
+                    except Exception as exc:  # pragma: no cover - network guard
+                        logger.warning("Skipping %s for risk check; price unavailable: %s", symbol, exc)
+                        continue
+                    notional = shares * price
+                    if risk_model.can_open_position(
+                        open_count + len(filtered_allocations),
+                        notional,
+                        crash_mode=crash,
+                        equity=equity_value,
+                        equity_return_pct=equity_return_pct,
+                    ):
+                        filtered_allocations[symbol] = shares
+                    else:
+                        logger.info("Risk cap blocked %s (notional %.2f)", symbol, notional)
+
+                execute_trades(filtered_allocations, crash_mode=crash)
 
             # Exit checks for existing positions
             open_positions = list_positions()
