@@ -50,6 +50,10 @@ def _max_position_notional(equity: float | None, crash_mode: bool) -> float:
     return min(max_pos_size, equity_cap) if max_pos_size else equity_cap
 
 
+def max_position_notional(equity: float | None, crash_mode: bool = False) -> float:
+    return _max_position_notional(equity, crash_mode)
+
+
 def can_open_position(
     current_positions: int,
     allocation_amount: float,

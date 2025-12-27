@@ -80,6 +80,7 @@ class Settings:
     alpaca_data_url: str = field(default_factory=lambda: os.getenv("ALPACA_API_DATA_URL", "https://data.alpaca.markets/v2"))
     trading_mode: str = field(default_factory=lambda: os.getenv("MODE", "paper").lower())
     allow_live_trading: bool = field(default_factory=lambda: _get_bool("ALLOW_LIVE_TRADING", False))
+    dry_run: bool = field(default_factory=lambda: _get_bool("DRY_RUN", False))
 
     twelvedata_api_key: str = field(default_factory=lambda: os.getenv("TWELVEDATA_API_KEY") or os.getenv("TWELVEDATA_KEY", ""))
     alphavantage_api_key: str = field(
@@ -121,6 +122,7 @@ class Settings:
     initial_equity: float = field(default_factory=lambda: float(os.getenv("INITIAL_EQUITY", "100000")))
     max_daily_loss_pct: float = field(default_factory=lambda: float(os.getenv("MAX_DAILY_LOSS_PCT", "0.03")))
     max_position_pct: float = field(default_factory=lambda: float(os.getenv("MAX_POSITION_PCT", "0.10")))
+    max_risk_pct: float = field(default_factory=lambda: float(os.getenv("MAX_RISK_PCT", "0.005")))
     atr_multiplier: float = field(default_factory=lambda: float(os.getenv("ATR_MULTIPLIER", "2.5")))
     min_confidence: float = field(default_factory=lambda: float(os.getenv("MIN_CONFIDENCE", "0.45")))
     default_timespan: str = field(default_factory=lambda: os.getenv("DEFAULT_TIMESPAN", "1day"))

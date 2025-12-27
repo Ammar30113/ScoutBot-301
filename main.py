@@ -8,7 +8,7 @@ from core.config import get_settings
 from universe.universe_builder import get_universe
 from strategy.signal_router import route_signals
 from trader.allocation import allocate_positions
-from trader.order_executor import execute_trades, close_position, list_positions, trading_client
+from trader.execution_adapter import execute_signals, close_position, list_positions, trading_client
 from trader import risk_model
 from data.price_router import PriceRouter
 from strategy.crash_detector import is_crash_mode
@@ -112,7 +112,22 @@ def microcap_cycle():
                     else:
                         logger.info("Risk cap blocked %s (notional %.2f)", symbol, notional)
 
-                execute_trades(filtered_allocations, crash_mode=crash)
+                signal_map = {
+                    sig["symbol"]: sig for sig in signals if isinstance(sig, dict) and sig.get("symbol")
+                }
+                trade_signals = []
+                for symbol, shares in filtered_allocations.items():
+                    metadata = signal_map.get(symbol, {})
+                    trade_signals.append(
+                        {
+                            "symbol": symbol,
+                            "action": "BUY",
+                            "requested_qty": shares,
+                            "reason": metadata.get("reason") or metadata.get("type"),
+                            "score": metadata.get("score"),
+                        }
+                    )
+                execute_signals(trade_signals, crash_mode=crash)
 
             # Exit checks for existing positions
             open_positions = list_positions()
@@ -121,6 +136,7 @@ def microcap_cycle():
                 datetime.now(timezone.utc).timestamp(),
             )
             for pos in open_positions:
+                symbol_key = pos.symbol.upper()
                 try:
                     current_price = float(pos.current_price)
                     entry_price = float(pos.avg_entry_price)
@@ -130,10 +146,30 @@ def microcap_cycle():
                     "symbol": pos.symbol,
                     "current_price": current_price,
                     "entry_price": entry_price,
-                    "entry_timestamp": entry_ts_map.get(pos.symbol),
+                    "entry_timestamp": entry_ts_map.get(symbol_key),
                 }
                 if risk_model.should_exit(position_payload, crash_mode=crash):
-                    close_position(pos.symbol)
+                    entry_ts = entry_ts_map.get(symbol_key)
+                    exit_reason = "technical_exit"
+                    if not current_price or not entry_price:
+                        exit_reason = "invalid_price"
+                    else:
+                        gain = (current_price / entry_price) - 1
+                        tp_pct = 0.015 if crash else risk_model.TAKE_PROFIT_PCT
+                        sl_pct = 0.005 if crash else risk_model.STOP_LOSS_PCT
+                        max_minutes = 60 if crash else 90
+                        if gain >= tp_pct:
+                            exit_reason = "take_profit"
+                        elif gain <= -sl_pct:
+                            exit_reason = "stop_loss"
+                        elif entry_ts is not None:
+                            try:
+                                elapsed = (datetime.now(timezone.utc).timestamp() - float(entry_ts)) / 60
+                                if elapsed >= max_minutes:
+                                    exit_reason = "time_stop"
+                            except (TypeError, ValueError):
+                                exit_reason = "technical_exit"
+                    close_position(pos.symbol, reason=exit_reason)
 
             logger.info("=== Cycle Complete ===")
             # After finishing a cycle:
