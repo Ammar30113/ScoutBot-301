@@ -88,6 +88,8 @@ class Settings:
         or os.getenv("ALPHAVANTAGE_KEY")
         or os.getenv("ALPHA_VANTAGE_KEY", "")
     )
+    marketstack_api_key: str = field(default_factory=lambda: os.getenv("MARKETSTACK_API_KEY", ""))
+    marketstack_cache_ttl: int = field(default_factory=lambda: int(os.getenv("MARKETSTACK_CACHE_TTL", "86400")))
     openai_api_key: str = field(default_factory=lambda: os.getenv("OPENAI_API_KEY", ""))
     openai_model: str = field(default_factory=lambda: OPENAI_MODEL)
     use_sentiment: bool = field(default_factory=lambda: USE_SENTIMENT)
@@ -110,6 +112,8 @@ class Settings:
     max_price: float = field(default_factory=lambda: float(os.getenv("MAX_PRICE", 80.0)))
     max_universe_size: int = field(default_factory=lambda: int(os.getenv("MAX_UNIVERSE_SIZE", 50)))
     cache_ttl: int = field(default_factory=lambda: int(os.getenv("CACHE_TTL", "900")))
+    intraday_stale_seconds: int = field(default_factory=lambda: int(os.getenv("INTRADAY_STALE_SECONDS", "900")))
+    daily_stale_seconds: int = field(default_factory=lambda: int(os.getenv("DAILY_STALE_SECONDS", "432000")))
     min_volume_history_days: int = field(default_factory=lambda: int(os.getenv("MIN_VOLUME_HISTORY_DAYS", "3")))
     allow_partial_fundamentals: bool = field(
         default_factory=lambda: str(os.getenv("ALLOW_PARTIAL_FUNDAMENTALS", "true")).lower() != "false"
@@ -135,6 +139,7 @@ def get_settings() -> Settings:
     settings.portfolio_state_path.parent.mkdir(parents=True, exist_ok=True)
     logger.info("TWELVEDATA_API_KEY detected: %s", bool(settings.twelvedata_api_key))
     logger.info("ALPHAVANTAGE_API_KEY detected: %s", bool(settings.alphavantage_api_key))
+    logger.info("MARKETSTACK_API_KEY detected: %s", bool(settings.marketstack_api_key))
     logger.info("OPENAI_API_KEY detected: %s", bool(settings.openai_api_key))
     logger.info("Trading mode=%s allow_live_trading=%s", settings.trading_mode, settings.allow_live_trading)
     if settings.use_twitter_news:

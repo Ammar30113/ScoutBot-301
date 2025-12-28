@@ -52,6 +52,11 @@ class BacktestResult:
     final_equity: float
     total_return: float
 
+    def summary(self) -> Dict[str, float]:
+        from backtest.metrics import summarize_backtest
+
+        return summarize_backtest(self)
+
 
 class BacktestRunner:
     def __init__(

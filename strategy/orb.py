@@ -7,11 +7,14 @@ from typing import Dict, List, Optional, Sequence
 import pandas as pd
 import pytz
 
+from core.config import get_settings
 from data.price_router import PriceRouter
-from strategy.technicals import compute_vwap
+from strategy.technicals import compute_vwap, compute_atr
+from trader.risk_model import STOP_LOSS_PCT, TAKE_PROFIT_PCT
 
 logger = logging.getLogger(__name__)
 price_router = PriceRouter()
+settings = get_settings()
 
 EASTERN = pytz.timezone("America/New_York")
 ORB_LOOKBACK_MINUTES = 180  # ensures the 9:30am bar is present through late morning
@@ -139,6 +142,19 @@ def _evaluate_orb(symbol: str, frame: pd.DataFrame, now: datetime) -> Optional[D
             continue
 
         score = _score_breakout(breakout_extension, vol_ratio)
+        atr_series = compute_atr(frame_today, window=14)
+        atr_current = float(atr_series.iloc[-1]) if len(atr_series) else 0.0
+        entry_price = close
+        atr_pct_intraday = (atr_current / entry_price) if entry_price > 0 and atr_current > 0 else 0.0
+        base_sl_pct = STOP_LOSS_PCT
+        base_tp_pct = TAKE_PROFIT_PCT
+        max_sl_pct = 0.08
+        max_tp_pct = 0.20
+        if atr_pct_intraday > 0:
+            stop_loss_pct = max(base_sl_pct, min(atr_pct_intraday * settings.atr_multiplier, max_sl_pct))
+        else:
+            stop_loss_pct = base_sl_pct
+        take_profit_pct = max(base_tp_pct, min(stop_loss_pct * 1.8, max_tp_pct))
         logger.info(
             "ORB breakout long %s: close=%.2f range=%.3f%% ext=%.3f vol_ratio=%.2f score=%.3f",
             symbol,
@@ -155,6 +171,9 @@ def _evaluate_orb(symbol: str, frame: pd.DataFrame, now: datetime) -> Optional[D
             "vol_ratio": vol_ratio,
             "orb_range_pct": range_pct,
             "orb_extension": breakout_extension,
+            "atr_pct": atr_pct_intraday,
+            "stop_loss_pct": stop_loss_pct,
+            "take_profit_pct": take_profit_pct,
             "reason": "5m ORB breakout long",
         }
     return None
@@ -180,8 +199,11 @@ def find_orb_setups(universe: Sequence[str], *, crash_mode: bool = False, now: O
         except Exception as exc:  # pragma: no cover - network guard
             logger.warning("ORB data unavailable for %s: %s", symbol, exc)
             continue
+        provider_lookup = getattr(price_router, "last_provider", None)
+        intraday_provider = provider_lookup(symbol, "intraday") if callable(provider_lookup) else None
         signal = _evaluate_orb(symbol, frame, now)
         if signal:
+            if intraday_provider:
+                signal["provider_intraday"] = intraday_provider
             signals.append(signal)
     return signals
-

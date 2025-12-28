@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import math
+import time
+from datetime import datetime
 from typing import Dict, List, Sequence
 
 import pandas as pd
@@ -9,6 +11,7 @@ from core.config import get_settings
 from core.logger import get_logger
 from data.alpaca_provider import AlpacaProvider
 from data.alphavantage_provider import AlphaVantageProvider
+from data.marketstack_provider import MarketstackProvider
 from data.twelvedata_provider import TwelveDataProvider
 from core.cache import get_cache
 
@@ -63,6 +66,11 @@ def _build_providers() -> Sequence[object]:
     else:
         logger.info("PriceRouter: AlphaVantage disabled (missing ALPHAVANTAGE_API_KEY)")
 
+    if settings.marketstack_api_key:
+        providers.append(MarketstackProvider())
+    else:
+        logger.info("PriceRouter: Marketstack disabled (missing MARKETSTACK_API_KEY)")
+
     logger.info("PriceRouter active providers: %s", [p.__class__.__name__ for p in providers])
     _providers_cache = providers
     return providers
@@ -73,6 +81,53 @@ class PriceRouter:
 
     def __init__(self) -> None:
         self.providers = _build_providers()
+        self._last_provider: Dict[str, str] = {}
+
+    @staticmethod
+    def _normalize_timestamp(value) -> float | None:
+        if value is None:
+            return None
+        if isinstance(value, pd.Timestamp):
+            return float(value.timestamp())
+        if isinstance(value, datetime):
+            return float(value.timestamp())
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    def _latest_timestamp(self, bars) -> float | None:
+        if bars is None:
+            return None
+        if hasattr(bars, "empty"):
+            if bars.empty or "timestamp" not in bars.columns:
+                return None
+            return self._normalize_timestamp(bars["timestamp"].iloc[-1])
+        if isinstance(bars, list):
+            latest = None
+            for item in bars:
+                if not isinstance(item, dict):
+                    continue
+                ts = self._normalize_timestamp(item.get("timestamp"))
+                if ts is None:
+                    continue
+                if latest is None or ts > latest:
+                    latest = ts
+            return latest
+        return None
+
+    def _bars_age_seconds(self, bars) -> float | None:
+        latest = self._latest_timestamp(bars)
+        if latest is None:
+            return None
+        return max(time.time() - latest, 0.0)
+
+    def _set_last_provider(self, symbol: str, kind: str, provider_name: str) -> None:
+        key = f"{kind}:{symbol.upper()}"
+        self._last_provider[key] = provider_name
+
+    def last_provider(self, symbol: str, kind: str = "intraday") -> str | None:
+        return self._last_provider.get(f"{kind}:{symbol.upper()}")
 
     @staticmethod
     def _merge_records(cached: List[Dict[str, float]], fresh: List[Dict[str, float]], limit: int) -> List[Dict[str, float]]:
@@ -92,13 +147,14 @@ class PriceRouter:
     def get_price(self, symbol: str) -> float:
         last_error: Exception | None = None
         for provider in self.providers:
+            provider_name = provider.__class__.__name__
             try:
                 price = provider.get_price(symbol)  # type: ignore[attr-defined]
                 if price is None:
                     continue
+                self._set_last_provider(symbol, "price", provider_name)
                 return price
             except Exception as exc:  # pragma: no cover - network guard
-                provider_name = provider.__class__.__name__
                 logger.warning("%s price lookup failed for %s: %s", provider_name, symbol, exc)
                 if "429" in str(exc):
                     logger.warning("Rate limit hit on %s, skipping %s", provider_name, symbol)
@@ -129,6 +185,17 @@ class PriceRouter:
                 else:
                     continue
                 if not frame.empty:
+                    age = self._bars_age_seconds(frame)
+                    if age is not None and age > settings.intraday_stale_seconds:
+                        logger.warning(
+                            "%s aggregates stale for %s (age %.1f min); trying next provider",
+                            provider_name,
+                            symbol,
+                            age / 60.0,
+                        )
+                        last_error = RuntimeError("stale intraday data")
+                        continue
+                    self._set_last_provider(symbol, "intraday", provider_name)
                     return frame.to_dict("records")
             except Exception as exc:  # pragma: no cover - network guard
                 logger.warning("%s aggregates failed for %s: %s", provider_name, symbol, exc)
@@ -140,13 +207,17 @@ class PriceRouter:
     def get_daily_aggregates(self, symbol: str, limit: int = 60) -> List[Dict[str, float]]:
         """
         Return up to ``limit`` daily bars.
-        Provider priority: TwelveData → AlphaVantage → Alpaca (Alpaca skipped for daily bars to avoid 429s).
+        Provider priority: TwelveData → AlphaVantage → Marketstack → Alpaca
+        (Alpaca skipped for daily bars to avoid 429s).
         """
 
         last_error: Exception | None = None
         limit = max(limit, 5)
         cache_key = f"daily_bars:{symbol.upper()}"
         cached_bars = cache.get(cache_key) or []
+        cached_age = self._bars_age_seconds(cached_bars)
+        if cached_age is not None and cached_age > settings.daily_stale_seconds:
+            cached_bars = []
         combined: List[Dict[str, float]] = []
         for provider in self.providers:
             provider_name = provider.__class__.__name__
@@ -161,9 +232,20 @@ class PriceRouter:
                 frame = self.aggregates_to_dataframe(bars)
                 if frame.empty:
                     continue
+                age = self._bars_age_seconds(frame)
+                if age is not None and age > settings.daily_stale_seconds:
+                    logger.warning(
+                        "%s daily aggregates stale for %s (age %.1f days); trying next provider",
+                        provider_name,
+                        symbol,
+                        age / 86400.0,
+                    )
+                    last_error = RuntimeError("stale daily data")
+                    continue
                 records = frame.to_dict("records")
                 combined = self._merge_records(cached_bars, records, limit)
                 if combined:
+                    self._set_last_provider(symbol, "daily", provider_name)
                     cache.set(cache_key, combined, settings.cache_ttl)
                     return combined
             except Exception as exc:  # pragma: no cover - network guard
@@ -186,7 +268,8 @@ class PriceRouter:
         for sym in symbols:
             cache_key = f"daily_bars:{sym.upper()}"
             cached = cache.get(cache_key)
-            if cached:
+            cached_age = self._bars_age_seconds(cached) if cached else None
+            if cached and (cached_age is None or cached_age <= settings.daily_stale_seconds):
                 results[sym] = cached
             else:
                 remaining.append(sym)
@@ -198,9 +281,19 @@ class PriceRouter:
                     try:
                         batch = provider.get_daily_bars_multi(remaining, limit=limit)  # type: ignore[attr-defined]
                         for sym, bars in batch.items():
+                            age = self._bars_age_seconds(bars)
+                            if age is not None and age > settings.daily_stale_seconds:
+                                logger.warning(
+                                    "%s batch daily bars stale for %s (age %.1f days); skipping",
+                                    provider_name,
+                                    sym,
+                                    age / 86400.0,
+                                )
+                                continue
                             merged = self._merge_records(cache.get(f"daily_bars:{sym}") or [], bars, limit)
                             cache.set(f"daily_bars:{sym}", merged, settings.cache_ttl)
                             results[sym] = merged
+                            self._set_last_provider(sym, "daily", provider_name)
                     except Exception as exc:  # pragma: no cover - network guard
                         logger.warning("%s batch daily bars failed: %s", provider_name, exc)
                 # no else; fall back to per-symbol below

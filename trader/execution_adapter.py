@@ -30,6 +30,8 @@ class TradeSignal(TypedDict, total=False):
     score: float
     requested_qty: int
     entry_price: float
+    stop_loss_pct: float
+    take_profit_pct: float
     stop_loss_price: float
     take_profit_price: float
     max_risk_pct: float
@@ -151,6 +153,22 @@ def execute_signal(signal: TradeSignal, *, crash_mode: bool = False) -> Executio
 
     stop_loss = signal.get("stop_loss_price")
     take_profit = signal.get("take_profit_price")
+    stop_loss_pct = signal.get("stop_loss_pct")
+    take_profit_pct = signal.get("take_profit_pct")
+    if stop_loss is None and stop_loss_pct is not None:
+        try:
+            pct = float(stop_loss_pct)
+            if 0 < pct < 1:
+                stop_loss = round(entry_price * (1 - pct), 2)
+        except (TypeError, ValueError):
+            stop_loss = None
+    if take_profit is None and take_profit_pct is not None:
+        try:
+            pct = float(take_profit_pct)
+            if 0 < pct < 1:
+                take_profit = round(entry_price * (1 + pct), 2)
+        except (TypeError, ValueError):
+            take_profit = None
     if stop_loss is None:
         stop_loss = stop_loss_price(entry_price, crash_mode=crash_mode)
     if take_profit is None:

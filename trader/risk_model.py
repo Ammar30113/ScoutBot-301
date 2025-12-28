@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 
 from core.config import get_settings
 from data.price_router import PriceRouter
-from strategy.technicals import passes_exit_filter
+from strategy.technicals import passes_exit_filter, compute_atr
 
 STOP_LOSS_PCT = 0.006
 TAKE_PROFIT_PCT = 0.018
@@ -110,9 +110,42 @@ def should_exit(position: dict, crash_mode: bool = False) -> bool:
         try:
             bars = price_router.get_aggregates(symbol, window=120)
             df = PriceRouter.aggregates_to_dataframe(bars)
-            if passes_exit_filter(df):
-                return True
+            if df is not None and not df.empty:
+                trailing_stop = _trailing_stop_from_bars(df, entry, entry_ts, crash_mode)
+                if trailing_stop is not None and price <= trailing_stop:
+                    logger.info("Trailing stop exit for %s at %.2f (trail %.2f)", symbol, price, trailing_stop)
+                    return True
+                if passes_exit_filter(df):
+                    return True
         except Exception as e:
             logger.warning("Risk exit forced due to price error: %s", e)
             return True  # FORCE EXIT when price unavailable
     return False
+
+
+def _trailing_stop_from_bars(
+    frame,
+    entry_price: float,
+    entry_timestamp: float | None,
+    crash_mode: bool,
+) -> float | None:
+    if frame is None or frame.empty:
+        return None
+    if entry_timestamp is not None:
+        frame = frame[frame["timestamp"] >= entry_timestamp]
+    if frame.empty:
+        return None
+    high_water = float(frame["high"].astype(float).max())
+    if high_water <= entry_price:
+        return None
+    atr_series = compute_atr(frame, window=14)
+    atr_value = float(atr_series.iloc[-1]) if len(atr_series) else 0.0
+    if atr_value <= 0:
+        return None
+    base_trail_pct = 0.005 if crash_mode else 0.007
+    max_trail_pct = 0.05 if crash_mode else 0.08
+    trail_distance = atr_value * settings.atr_multiplier * 0.6
+    min_distance = entry_price * base_trail_pct
+    max_distance = entry_price * max_trail_pct
+    distance = min(max(trail_distance, min_distance), max_distance)
+    return high_water - distance

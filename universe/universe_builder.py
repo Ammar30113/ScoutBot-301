@@ -45,7 +45,13 @@ def _csv_universe(path) -> list[str]:
 
 
 def _load_candidates() -> list[str]:
-    for path in CANDIDATE_FILES:
+    candidate_files = list(CANDIDATE_FILES)
+    if settings.marketstack_api_key and not settings.twelvedata_api_key and not settings.alphavantage_api_key:
+        candidate_files = [settings.universe_fallback_csv] + [
+            path for path in candidate_files if path != settings.universe_fallback_csv
+        ]
+        logger.info("Universe: Marketstack-only daily data; prioritizing fallback CSV to limit API usage")
+    for path in candidate_files:
         symbols = _csv_universe(path)
         if symbols:
             logger.info("Universe candidates loaded from %s (%s tickers)", path, len(symbols))

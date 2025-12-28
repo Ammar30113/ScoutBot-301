@@ -3,7 +3,7 @@
 This repository contains a from-scratch rewrite of the Microcap Scout Bot. The system uses a multi-provider market-data stack, an intraday ML classifier, and a signal router tuned for small-cap momentum workflows.
 
 ## Highlights
-- **Market data router** prioritizes Alpaca -> TwelveData -> AlphaVantage for prices/intraday; daily bars use TwelveData/AlphaVantage with caching + rate-limit backoff.
+- **Market data router** prioritizes Alpaca -> TwelveData -> AlphaVantage for prices/intraday; daily bars use TwelveData/AlphaVantage/Marketstack with caching + rate-limit backoff.
 - **Universe engine** loads CSV candidates (Russell3000 + fallback), filters by liquidity, ATR%, price, and market cap, with optional partial fundamentals/ATR.
 - **ML classifier** (XGBoost) saved at `models/momentum_sentiment_model.pkl` predicts next-bar upside from 5-minute features (RSI, MACD, VWAP diff, slope, volume ratio, ATR, ATR-band position).
 - **Strategies**: 5-minute ORB (morning only), momentum breakout, reversal; router blends ML prob, momentum rank, sentiment, and P&L penalty.
@@ -35,6 +35,8 @@ Set the following variables inside Railway (or a local `.env` file - the project
 | `ALLOW_LIVE_TRADING` | Explicitly enable live trading (default `false`) |
 | `TWELVEDATA_API_KEY` | Optional fallback data |
 | `ALPHAVANTAGE_API_KEY` | Optional fallback data |
+| `MARKETSTACK_API_KEY` | Optional Marketstack EOD daily bars |
+| `MARKETSTACK_CACHE_TTL` | Marketstack daily cache TTL seconds (default `86400`) |
 | `OPENAI_API_KEY` | Required for GPT sentiment engine |
 | `OPENAI_MODEL` | Primary model for sentiment (default `gpt-3.5-turbo-16k`) |
 | `USE_SENTIMENT` | Toggle sentiment system (default `true`) |
@@ -60,6 +62,8 @@ Set the following variables inside Railway (or a local `.env` file - the project
 | `SCHEDULER_INTERVAL_SECONDS` | Re-run cadence (default `900`) |
 | `PORTFOLIO_STATE_PATH` | JSON state path (default `data/portfolio_state.json`) |
 | `CACHE_TTL` | Price cache TTL seconds (default `900`) |
+| `INTRADAY_STALE_SECONDS` | Max intraday bar staleness in seconds (default `900`) |
+| `DAILY_STALE_SECONDS` | Max daily bar staleness in seconds (default `432000`) |
 
 ## Running Locally
 ```bash
