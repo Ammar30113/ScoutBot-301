@@ -14,7 +14,7 @@ def is_crash_mode() -> tuple[bool, float]:
     """
 
     try:
-        bars = price_router.get_aggregates("SPY", window=10)  # get at least two 5m bars post-resample
+        bars = price_router.get_aggregates("SPY", window=10, allow_stale=True)  # get at least two 5m bars post-resample
         if not bars or len(bars) < 2:
             return False, 0.0
         close_prev = float(bars[-2]["close"])

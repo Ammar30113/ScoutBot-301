@@ -161,14 +161,16 @@ class PriceRouter:
                 last_error = exc
         raise RuntimeError(f"All providers failed to return price for {symbol}") from last_error
 
-    def get_aggregates(self, symbol: str, window: int = 60) -> List[Dict[str, float]]:
+    def get_aggregates(self, symbol: str, window: int = 60, *, allow_stale: bool = False) -> List[Dict[str, float]]:
         """
         Return 5-minute bars covering the last ``window`` minutes.
         Provider priority: Alpaca → TwelveData → AlphaVantage.
+        If ``allow_stale`` is True, return the freshest stale bars when no provider is fresh.
         """
 
         last_error: Exception | None = None
         bars_needed = max(int(math.ceil(window / 5)), 1)
+        stale_candidate: tuple[float, str, List[Dict[str, float]]] | None = None
         for provider in self.providers:
             provider_name = provider.__class__.__name__
             try:
@@ -187,12 +189,17 @@ class PriceRouter:
                 if not frame.empty:
                     age = self._bars_age_seconds(frame)
                     if age is not None and age > settings.intraday_stale_seconds:
-                        logger.warning(
-                            "%s aggregates stale for %s (age %.1f min); trying next provider",
-                            provider_name,
-                            symbol,
-                            age / 60.0,
-                        )
+                        if allow_stale:
+                            records = frame.to_dict("records")
+                            if stale_candidate is None or age < stale_candidate[0]:
+                                stale_candidate = (age, provider_name, records)
+                        else:
+                            logger.warning(
+                                "%s aggregates stale for %s (age %.1f min); trying next provider",
+                                provider_name,
+                                symbol,
+                                age / 60.0,
+                            )
                         last_error = RuntimeError("stale intraday data")
                         continue
                     self._set_last_provider(symbol, "intraday", provider_name)
@@ -202,6 +209,16 @@ class PriceRouter:
                 if "429" in str(exc):
                     logger.warning("Rate limit hit on %s, skipping %s", provider_name, symbol)
                 last_error = exc
+        if allow_stale and stale_candidate is not None:
+            age, provider_name, records = stale_candidate
+            logger.warning(
+                "All providers stale for %s; using %s aggregates (age %.1f min)",
+                symbol,
+                provider_name,
+                age / 60.0,
+            )
+            self._set_last_provider(symbol, "intraday", provider_name)
+            return records
         raise RuntimeError(f"All providers failed to return aggregates for {symbol}") from last_error
 
     def get_daily_aggregates(self, symbol: str, limit: int = 60) -> List[Dict[str, float]]:
