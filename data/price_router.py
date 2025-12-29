@@ -19,6 +19,27 @@ logger = get_logger(__name__)
 settings = get_settings()
 cache = get_cache()
 _providers_cache: Sequence[object] | None = None
+_alpaca_daily_fallback_warned = False
+
+
+def _has_external_daily_provider() -> bool:
+    return bool(settings.twelvedata_api_key or settings.alphavantage_api_key or settings.marketstack_api_key)
+
+
+def _allow_alpaca_daily() -> bool:
+    if settings.allow_alpaca_daily is True:
+        return True
+    if settings.allow_alpaca_daily is False:
+        return False
+    if _has_external_daily_provider():
+        return False
+    global _alpaca_daily_fallback_warned
+    if not _alpaca_daily_fallback_warned:
+        logger.warning(
+            "No external daily providers configured; enabling Alpaca daily fallback. Set ALLOW_ALPACA_DAILY=false to disable."
+        )
+        _alpaca_daily_fallback_warned = True
+    return True
 
 
 def resample_to_5m(bars) -> pd.DataFrame:
@@ -122,6 +143,9 @@ class PriceRouter:
             return None
         return max(time.time() - latest, 0.0)
 
+    def bars_age_seconds(self, bars) -> float | None:
+        return self._bars_age_seconds(bars)
+
     def _set_last_provider(self, symbol: str, kind: str, provider_name: str) -> None:
         key = f"{kind}:{symbol.upper()}"
         self._last_provider[key] = provider_name
@@ -224,12 +248,13 @@ class PriceRouter:
     def get_daily_aggregates(self, symbol: str, limit: int = 60) -> List[Dict[str, float]]:
         """
         Return up to ``limit`` daily bars.
-        Provider priority: TwelveData → AlphaVantage → Marketstack → Alpaca
-        (Alpaca skipped for daily bars to avoid 429s).
+        Provider priority: TwelveData → AlphaVantage → Marketstack → Alpaca.
+        Alpaca daily is used only when ALLOW_ALPACA_DAILY=true or no external daily providers are configured.
         """
 
         last_error: Exception | None = None
         limit = max(limit, 5)
+        allow_alpaca_daily = _allow_alpaca_daily()
         cache_key = f"daily_bars:{symbol.upper()}"
         cached_bars = cache.get(cache_key) or []
         cached_age = self._bars_age_seconds(cached_bars)
@@ -238,8 +263,8 @@ class PriceRouter:
         combined: List[Dict[str, float]] = []
         for provider in self.providers:
             provider_name = provider.__class__.__name__
-            if isinstance(provider, AlpacaProvider):
-                # Skip Alpaca for daily bars to avoid rate limits; rely on TwelveData/AlphaVantage
+            if isinstance(provider, AlpacaProvider) and not allow_alpaca_daily:
+                # Skip Alpaca for daily bars to avoid rate limits unless explicitly enabled.
                 continue
             try:
                 if hasattr(provider, "get_aggregates"):

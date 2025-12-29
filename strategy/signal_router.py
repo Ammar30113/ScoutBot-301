@@ -54,14 +54,20 @@ def _log_signal(signal: Dict[str, float | str]) -> None:
 def route_signals(universe: List[str], crash_mode: bool = False, context=None) -> List[Dict[str, float | str]]:
     orb_signals = find_orb_setups(universe, crash_mode=crash_mode)
     skip_symbols = {sig["symbol"] for sig in orb_signals}
+    orb_symbols = [sig.get("symbol") for sig in orb_signals if isinstance(sig, dict) and sig.get("symbol")]
 
     momentum = compute_momentum_scores(universe, top_k=0, crash_mode=crash_mode)
     momentum_map = {sym: score for sym, score in momentum}
 
     ml_preds = generate_predictions(universe, crash_mode=crash_mode)
     daily_bars_map = {}
+    symbols_for_daily: List[str] = []
     if ml_preds:
-        symbols = [sym for sym, _, _ in ml_preds]
+        symbols_for_daily.extend(sym for sym, _, _ in ml_preds if sym)
+    if orb_symbols:
+        symbols_for_daily.extend(orb_symbols)
+    if symbols_for_daily:
+        symbols = list(dict.fromkeys(symbols_for_daily))
         if hasattr(price_router, "get_daily_bars_batch"):
             daily_bars_map = price_router.get_daily_bars_batch(symbols, limit=60)
         else:
@@ -79,8 +85,26 @@ def route_signals(universe: List[str], crash_mode: bool = False, context=None) -
             continue
         daily_regime_map[sym] = compute_daily_regime(df_daily)
 
-    signals: List[Dict[str, float | str]] = list(orb_signals)
-    for sig in orb_signals:
+    regime_gate_min = float(settings.regime_gate_min_score or 0.0)
+    filtered_orb_signals: List[Dict[str, float | str]] = []
+    if orb_signals and not crash_mode:
+        for sig in orb_signals:
+            symbol = sig.get("symbol") if isinstance(sig, dict) else None
+            if not symbol:
+                continue
+            regime = daily_regime_map.get(symbol)
+            regime_score = float(regime.score) if regime else 0.0
+            if regime_score < regime_gate_min:
+                continue
+            sig["regime_score"] = regime_score
+            sig["regime"] = regime.label if regime else "unknown"
+            sig["daily_atr_pct"] = float(regime.atr_pct) if regime else 0.0
+            filtered_orb_signals.append(sig)
+    else:
+        filtered_orb_signals = list(orb_signals)
+
+    signals: List[Dict[str, float | str]] = list(filtered_orb_signals)
+    for sig in filtered_orb_signals:
         _log_signal(sig)
     max_rank = max(len(momentum_map), 1)
     rate_limited: set[str] = set()
@@ -96,6 +120,12 @@ def route_signals(universe: List[str], crash_mode: bool = False, context=None) -
         ml_threshold_reversal = 0.28
         if prob < ml_threshold_trend:
             continue
+        regime = daily_regime_map.get(symbol)
+        regime_score = float(regime.score) if regime else 0.0
+        if not crash_mode and regime_score < regime_gate_min:
+            continue
+        regime_label = regime.label if regime else "unknown"
+        daily_atr_pct = float(regime.atr_pct) if regime else 0.0
         sentiment = 0.0
         if settings.use_sentiment:
             sentiment_raw = float(get_symbol_sentiment(symbol) or 0.0)
@@ -123,11 +153,6 @@ def route_signals(universe: List[str], crash_mode: bool = False, context=None) -
         else:
             intraday_provider = None
             daily_provider = None
-
-        regime = daily_regime_map.get(symbol)
-        regime_score = float(regime.score) if regime else 0.0
-        regime_label = regime.label if regime else "unknown"
-        daily_atr_pct = float(regime.atr_pct) if regime else 0.0
 
         momentum_score = momentum_map.get(symbol, 0.0)
         vol_ratio = float(features.get("vol_ratio", 1.0) or 1.0)

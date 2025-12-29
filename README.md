@@ -33,6 +33,7 @@ Set the following variables inside Railway (or a local `.env` file - the project
 | `ALPACA_API_DATA_URL` | Default `https://data.alpaca.markets/v2` |
 | `MODE` | Trading mode (`paper` or `live`, default `paper`) |
 | `ALLOW_LIVE_TRADING` | Explicitly enable live trading (default `false`) |
+| `ALLOW_ALPACA_DAILY` | Allow Alpaca daily bars; when unset, Alpaca daily is used only if no external daily provider is configured |
 | `TWELVEDATA_API_KEY` | Optional fallback data |
 | `ALPHAVANTAGE_API_KEY` | Optional fallback data |
 | `MARKETSTACK_API_KEY` | Optional Marketstack EOD daily bars |
@@ -54,8 +55,10 @@ Set the following variables inside Railway (or a local `.env` file - the project
 | `MIN_PRICE` | Min price filter (default `2`) |
 | `MAX_PRICE` | Max price filter (default `80`) |
 | `MAX_UNIVERSE_SIZE` | Max symbols returned (default `50`) |
+| `UNIVERSE_LIQUIDITY_TOP_N` | Preselect top N symbols by avg dollar volume before filters (default `300`) |
 | `ALLOW_PARTIAL_FUNDAMENTALS` | Allow symbols with missing market cap (default `true`) |
 | `ALLOW_PARTIAL_ATR` | Allow symbols with missing ATR (default `true`) |
+| `REGIME_GATE_MIN_SCORE` | Minimum daily regime score to allow entries (default `0.0`) |
 | `DAILY_BUDGET_USD` | Per-cycle allocation budget (default `10000`) |
 | `MAX_POSITIONS` | Max open positions (default `5`) |
 | `MAX_POSITION_SIZE` | Max notional per position (defaults to DAILY_BUDGET/3) |

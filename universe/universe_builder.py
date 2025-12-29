@@ -38,14 +38,42 @@ def _filter_symbols(symbols: list[str]) -> list[str]:
     return [sym for sym in symbols if isinstance(sym, str) and pattern.match(sym.upper())]
 
 
+def _has_external_daily_provider() -> bool:
+    return bool(settings.twelvedata_api_key or settings.alphavantage_api_key or settings.marketstack_api_key)
+
+
 def _csv_universe(path) -> list[str]:
     csv_path = path if isinstance(path, Path) else Path(path)
     df = load_universe_from_csv(csv_path)
     return _filter_symbols(df["symbol"].dropna().astype(str).str.upper().tolist())
 
 
+def _avg_dollar_volume(bars: Optional[List[Dict[str, float]]], lookback: int) -> Optional[float]:
+    if not bars:
+        return None
+    try:
+        sorted_bars = sorted(bars, key=lambda row: float(row.get("timestamp", 0.0)))
+    except Exception:
+        sorted_bars = list(bars)
+    values: List[float] = []
+    for row in sorted_bars:
+        try:
+            close = float(row.get("close", 0.0))
+            volume = float(row.get("volume", 0.0))
+        except (TypeError, ValueError):
+            continue
+        if close > 0 and volume > 0:
+            values.append(close * volume)
+    if len(values) < lookback:
+        return None
+    return float(sum(values[-lookback:]) / float(lookback))
+
+
 def _load_candidates() -> list[str]:
     candidate_files = list(CANDIDATE_FILES)
+    if not _has_external_daily_provider() and settings.allow_alpaca_daily is not True:
+        logger.warning("Universe: no external daily providers configured; using fallback universe only")
+        return _csv_universe(settings.universe_fallback_csv)
     if settings.marketstack_api_key and not settings.twelvedata_api_key and not settings.alphavantage_api_key:
         candidate_files = [settings.universe_fallback_csv] + [
             path for path in candidate_files if path != settings.universe_fallback_csv
@@ -175,6 +203,22 @@ def get_universe() -> list[str]:
     passed: List[dict] = []
 
     daily_bars_map = price_router.get_daily_bars_batch(candidates, limit=60) if candidates else {}
+    top_n = max(int(settings.universe_liquidity_top_n or 0), 0)
+    if top_n > 0 and candidates:
+        lookback = max(settings.min_volume_history_days, 3)
+        liquidity_scores: List[tuple[str, float]] = []
+        for symbol in candidates:
+            avg = _avg_dollar_volume(daily_bars_map.get(symbol), lookback)
+            if avg is not None:
+                liquidity_scores.append((symbol, avg))
+        if liquidity_scores:
+            liquidity_scores.sort(key=lambda row: row[1], reverse=True)
+            top_count = min(top_n, len(liquidity_scores))
+            top_symbols = {sym for sym, _ in liquidity_scores[:top_count]}
+            candidates = [sym for sym in candidates if sym in top_symbols]
+            logger.info("Universe: preselected top %s liquidity symbols (%s retained)", top_count, len(candidates))
+        else:
+            logger.info("Universe: liquidity prefilter found no valid bars; skipping prefilter")
     for symbol in candidates:
         preloaded = daily_bars_map.get(symbol) if daily_bars_map else None
         frame = _load_daily_frame(symbol, preloaded=preloaded)

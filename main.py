@@ -11,7 +11,7 @@ from trader.allocation import allocate_positions
 from trader.execution_adapter import execute_signals, close_position, list_positions, trading_client
 from trader import risk_model
 from data.price_router import PriceRouter
-from strategy.crash_detector import is_crash_mode
+from strategy.crash_detector import get_crash_state
 from trader.pnl_tracker import update_daily_pnl
 from data.portfolio_state import sync_entry_timestamps
 from types import SimpleNamespace
@@ -74,7 +74,17 @@ def microcap_cycle():
             # Pass penalty into signal router
             context.pnl_penalty = pnl_penalty
             logger.info(f"P&L penalty for this cycle: {pnl_penalty}")
-            crash, drop = is_crash_mode()
+            crash, drop, data_age = get_crash_state()
+            if data_age is None:
+                logger.warning("Intraday data check failed; skipping cycle")
+                continue
+            if data_age > settings.intraday_stale_seconds:
+                logger.warning(
+                    "Intraday data stale (age %.1f min > %.1f min); skipping cycle",
+                    data_age / 60.0,
+                    settings.intraday_stale_seconds / 60.0,
+                )
+                continue
             logger.info("Crash mode = %s (SPY 5min drop = %.3f)", crash, drop)
             logger.info("=== Crash Mode %s ===", "ACTIVE" if crash else "OFF")
 

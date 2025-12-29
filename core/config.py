@@ -42,6 +42,13 @@ def _get_bool(name: str, default: bool) -> bool:
     return val.lower() in ("1", "true", "yes", "y")
 
 
+def _get_optional_bool(name: str) -> bool | None:
+    val = os.getenv(name)
+    if val is None:
+        return None
+    return val.lower() in ("1", "true", "yes", "y")
+
+
 def _get_int(name: str, default: int) -> int:
     try:
         return int(os.getenv(name, str(default)))
@@ -81,6 +88,7 @@ class Settings:
     trading_mode: str = field(default_factory=lambda: os.getenv("MODE", "paper").lower())
     allow_live_trading: bool = field(default_factory=lambda: _get_bool("ALLOW_LIVE_TRADING", False))
     dry_run: bool = field(default_factory=lambda: _get_bool("DRY_RUN", False))
+    allow_alpaca_daily: bool | None = field(default_factory=lambda: _get_optional_bool("ALLOW_ALPACA_DAILY"))
 
     twelvedata_api_key: str = field(default_factory=lambda: os.getenv("TWELVEDATA_API_KEY") or os.getenv("TWELVEDATA_KEY", ""))
     alphavantage_api_key: str = field(
@@ -111,6 +119,7 @@ class Settings:
     min_price: float = field(default_factory=lambda: float(os.getenv("MIN_PRICE", 2.0)))
     max_price: float = field(default_factory=lambda: float(os.getenv("MAX_PRICE", 80.0)))
     max_universe_size: int = field(default_factory=lambda: int(os.getenv("MAX_UNIVERSE_SIZE", 50)))
+    universe_liquidity_top_n: int = field(default_factory=lambda: _get_int("UNIVERSE_LIQUIDITY_TOP_N", 300))
     cache_ttl: int = field(default_factory=lambda: int(os.getenv("CACHE_TTL", "900")))
     intraday_stale_seconds: int = field(default_factory=lambda: int(os.getenv("INTRADAY_STALE_SECONDS", "900")))
     daily_stale_seconds: int = field(default_factory=lambda: int(os.getenv("DAILY_STALE_SECONDS", "432000")))
@@ -119,6 +128,7 @@ class Settings:
         default_factory=lambda: str(os.getenv("ALLOW_PARTIAL_FUNDAMENTALS", "true")).lower() != "false"
     )
     allow_partial_atr: bool = field(default_factory=lambda: str(os.getenv("ALLOW_PARTIAL_ATR", "true")).lower() != "false")
+    regime_gate_min_score: float = field(default_factory=lambda: float(os.getenv("REGIME_GATE_MIN_SCORE", "0.0")))
 
     scheduler_interval_seconds: int = field(default_factory=lambda: int(os.getenv("SCHEDULER_INTERVAL_SECONDS", "900")))
     max_positions: int = field(default_factory=lambda: int(os.getenv("MAX_POSITIONS", "10")))
