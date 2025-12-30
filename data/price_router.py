@@ -153,6 +153,19 @@ class PriceRouter:
     def last_provider(self, symbol: str, kind: str = "intraday") -> str | None:
         return self._last_provider.get(f"{kind}:{symbol.upper()}")
 
+    def _provider_rate_limited(self, provider: object) -> bool:
+        checker = getattr(provider, "is_rate_limited", None)
+        return bool(checker()) if callable(checker) else False
+
+    def _daily_providers(self, allow_alpaca_daily: bool) -> list[object]:
+        providers: list[object] = []
+        for provider in self.providers:
+            if isinstance(provider, AlpacaProvider) and not allow_alpaca_daily:
+                continue
+            if hasattr(provider, "get_aggregates"):
+                providers.append(provider)
+        return providers
+
     @staticmethod
     def _merge_records(cached: List[Dict[str, float]], fresh: List[Dict[str, float]], limit: int) -> List[Dict[str, float]]:
         """Merge cached + fresh bars by timestamp."""
@@ -255,12 +268,16 @@ class PriceRouter:
         last_error: Exception | None = None
         limit = max(limit, 5)
         allow_alpaca_daily = _allow_alpaca_daily()
+        daily_providers = self._daily_providers(allow_alpaca_daily)
         cache_key = f"daily_bars:{symbol.upper()}"
         cached_bars = cache.get(cache_key) or []
         cached_age = self._bars_age_seconds(cached_bars)
         if cached_age is not None and cached_age > settings.daily_stale_seconds:
             cached_bars = []
         combined: List[Dict[str, float]] = []
+        if settings.skip_daily_on_rate_limit and daily_providers:
+            if all(self._provider_rate_limited(provider) for provider in daily_providers):
+                return cached_bars or combined
         for provider in self.providers:
             provider_name = provider.__class__.__name__
             if isinstance(provider, AlpacaProvider) and not allow_alpaca_daily:
@@ -316,6 +333,17 @@ class PriceRouter:
             else:
                 remaining.append(sym)
 
+        allow_alpaca_daily = _allow_alpaca_daily()
+        daily_providers = self._daily_providers(allow_alpaca_daily)
+        if remaining and settings.skip_daily_on_rate_limit and daily_providers:
+            if all(self._provider_rate_limited(provider) for provider in daily_providers):
+                logger.warning(
+                    "Daily providers rate-limited; skipping per-symbol daily fetch for %s symbols",
+                    len(remaining),
+                )
+                for sym in remaining:
+                    results.setdefault(sym, [])
+                return results
         if remaining:
             for provider in self.providers:
                 if hasattr(provider, "get_daily_bars_multi"):

@@ -56,25 +56,39 @@ class TwelveDataProvider:
     """Lightweight TwelveData wrapper for price + aggregates."""
 
     BASE_URL = "https://api.twelvedata.com"
+    _rate_limit_until = 0.0
+    _disabled = False
 
     def __init__(self) -> None:
         settings = get_settings()
         self.api_key = settings.twelvedata_api_key
+        self._strip_on_rate_limit = settings.strip_rate_limited_keys
         self.cache = get_cache()
         self.ttl = settings.cache_ttl
         self.no_data_ttl = max(60, min(int(self.ttl / 2) if self.ttl else 0, 900))
-        self._rate_limit_until = 0.0
         if not self.api_key:
             logger.warning("TwelveDataProvider initialized without API key")
 
+    def is_rate_limited(self) -> bool:
+        return TwelveDataProvider._disabled or time.time() < TwelveDataProvider._rate_limit_until
+
     def _rate_limited(self) -> bool:
-        return time.time() < self._rate_limit_until
+        return self.is_rate_limited()
 
     def _set_rate_limit(self, seconds: int, reason: str) -> None:
         until = time.time() + max(int(seconds), 1)
-        if until > self._rate_limit_until:
-            self._rate_limit_until = until
+        if until > TwelveDataProvider._rate_limit_until:
+            TwelveDataProvider._rate_limit_until = until
             logger.warning("TwelveData rate limit: cooling down %ds (%s)", int(seconds), reason or "rate limit")
+        if self._strip_on_rate_limit:
+            self._disable_provider(reason)
+
+    def _disable_provider(self, reason: str) -> None:
+        if TwelveDataProvider._disabled:
+            return
+        TwelveDataProvider._disabled = True
+        self.api_key = ""
+        logger.warning("TwelveData disabled after rate limit (%s)", reason or "rate limit")
 
     def _rate_limit_seconds(self, message: str) -> int:
         msg = (message or "").lower()

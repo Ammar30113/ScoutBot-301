@@ -89,6 +89,8 @@ class Settings:
     allow_live_trading: bool = field(default_factory=lambda: _get_bool("ALLOW_LIVE_TRADING", False))
     dry_run: bool = field(default_factory=lambda: _get_bool("DRY_RUN", False))
     allow_alpaca_daily: bool | None = field(default_factory=lambda: _get_optional_bool("ALLOW_ALPACA_DAILY"))
+    strip_rate_limited_keys: bool = field(default_factory=lambda: _get_bool("STRIP_RATE_LIMITED_KEYS", False))
+    skip_daily_on_rate_limit: bool = field(default_factory=lambda: _get_bool("SKIP_DAILY_ON_RATE_LIMIT", True))
 
     twelvedata_api_key: str = field(default_factory=lambda: os.getenv("TWELVEDATA_API_KEY") or os.getenv("TWELVEDATA_KEY", ""))
     alphavantage_api_key: str = field(
@@ -114,6 +116,7 @@ class Settings:
     universe_fallback_csv: Path = field(
         default_factory=lambda: Path(os.getenv("UNIVERSE_FALLBACK_CSV", "universe/fallback_universe.csv"))
     )
+    universe_fallback_only: bool = field(default_factory=lambda: _get_bool("UNIVERSE_FALLBACK_ONLY", False))
     min_dollar_volume: float = field(default_factory=lambda: float(os.getenv("MIN_DOLLAR_VOLUME", 8_000_000)))
     min_mkt_cap: float = field(default_factory=lambda: float(os.getenv("MIN_MKT_CAP", 300_000_000)))
     max_mkt_cap: float = field(default_factory=lambda: float(os.getenv("MAX_MKT_CAP", 5_000_000_000)))

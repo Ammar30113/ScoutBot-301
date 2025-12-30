@@ -34,6 +34,7 @@ Set the following variables inside Railway (or a local `.env` file - the project
 | `MODE` | Trading mode (`paper` or `live`, default `paper`) |
 | `ALLOW_LIVE_TRADING` | Explicitly enable live trading (default `false`) |
 | `ALLOW_ALPACA_DAILY` | Allow Alpaca daily bars; when unset, Alpaca daily is used only if no external daily provider is configured |
+| `STRIP_RATE_LIMITED_KEYS` | Disable providers after rate-limit errors (default `false`) |
 | `TWELVEDATA_API_KEY` | Optional fallback data |
 | `ALPHAVANTAGE_API_KEY` | Optional fallback data |
 | `MARKETSTACK_API_KEY` | Optional Marketstack EOD daily bars |
@@ -49,6 +50,7 @@ Set the following variables inside Railway (or a local `.env` file - the project
 | `TWITTER_TWEETS_PER_ACCOUNT` | Max tweets per account per day (default `1`) |
 | `SENTIMENT_CACHE_TTL` | Sentiment cache TTL seconds (default `300`) |
 | `UNIVERSE_FALLBACK_CSV` | CSV fallback path (default `universe/fallback_universe.csv`) |
+| `UNIVERSE_FALLBACK_ONLY` | Use fallback CSV only (skip filters/API calls, default `false`) |
 | `MIN_DOLLAR_VOLUME` | Min avg daily dollar volume (default `8000000`) |
 | `MIN_VOLUME_HISTORY_DAYS` | Lookback days for dollar-volume filter (default `3`) |
 | `MIN_MKT_CAP` | Min market cap filter (default `300000000`) |
@@ -68,6 +70,7 @@ Set the following variables inside Railway (or a local `.env` file - the project
 | `CACHE_TTL` | Price cache TTL seconds (default `900`) |
 | `INTRADAY_STALE_SECONDS` | Max intraday bar staleness in seconds (default `900`) |
 | `DAILY_STALE_SECONDS` | Max daily bar staleness in seconds (default `432000`) |
+| `SKIP_DAILY_ON_RATE_LIMIT` | Skip per-symbol daily fetches when daily providers are rate-limited (default `true`) |
 
 ## Running Locally
 ```bash

@@ -248,6 +248,17 @@ def _build_universe_from_candidates(candidates: list[str], *, label: str | None 
 def get_universe() -> list[str]:
     """Build universe via liquidity/volatility/market-cap filters."""
 
+    if settings.universe_fallback_only:
+        fallback = _filter_symbols(_csv_universe(settings.universe_fallback_csv))
+        if not fallback:
+            logger.warning("Universe fallback-only enabled but fallback CSV missing/empty")
+            return []
+        max_size = max(int(settings.max_universe_size or 0), 0)
+        if max_size:
+            fallback = fallback[:max_size]
+        logger.warning("Universe fallback-only enabled; returning %s fallback symbols", len(fallback))
+        return fallback
+
     candidates = _filter_symbols(_load_candidates())
     final_symbols = _build_universe_from_candidates(candidates)
     if final_symbols:
