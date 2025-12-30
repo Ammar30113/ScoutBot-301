@@ -104,6 +104,7 @@ class Settings:
     sentiment_cache_ttl: int = field(default_factory=lambda: SENTIMENT_CACHE_TTL)
     use_twitter_news: bool = field(default_factory=lambda: USE_TWITTER_NEWS)
     twitter_bearer_token: str = field(default_factory=lambda: os.getenv("TWITTER_BEARER_TOKEN", ""))
+    allow_synthetic_ml: bool = field(default_factory=lambda: _get_bool("ALLOW_SYNTHETIC_ML", False))
     twitter_allowed_accounts: list[str] = field(
         default_factory=lambda: _get_csv("TWITTER_ALLOWED_ACCOUNTS", DEFAULT_TWITTER_ALLOWED_ACCOUNTS)
     )

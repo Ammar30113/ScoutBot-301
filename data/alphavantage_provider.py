@@ -17,6 +17,27 @@ LOG_SAMPLE_LIMIT = 5
 _warn_counts: dict[str, int] = defaultdict(int)
 _NO_DATA = object()
 RATE_LIMIT_COOLDOWN = 70
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:  # pragma: no cover - py<3.9
+    ZoneInfo = None
+
+_DEFAULT_TZ = ZoneInfo("America/New_York") if ZoneInfo else timezone.utc
+
+
+def _parse_timestamp(value: str | None) -> float | None:
+    if not value:
+        return None
+    raw = str(value)
+    if raw.endswith("Z"):
+        raw = raw.replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=_DEFAULT_TZ)
+    return parsed.timestamp()
 
 
 def _warn_sample(reason: str, message: str, *, level: int = logging.WARNING) -> None:
@@ -165,6 +186,9 @@ class AlphaVantageProvider:
             return cached
         normalized: List[Dict[str, float]] = []
         for date_str, values in list(data.items())[:limit]:
+            ts = _parse_timestamp(date_str)
+            if ts is None:
+                continue
             normalized.append(
                 {
                     "open": float(values["1. open"]),
@@ -172,7 +196,7 @@ class AlphaVantageProvider:
                     "low": float(values["3. low"]),
                     "close": float(values["4. close"]),
                     "volume": float(values["6. volume"]),
-                    "timestamp": datetime.fromisoformat(date_str).timestamp(),
+                    "timestamp": ts,
                 }
             )
         normalized.sort(key=lambda row: row["timestamp"])
@@ -218,6 +242,9 @@ class AlphaVantageProvider:
 
         normalized: List[Dict[str, float]] = []
         for date_str, values in list(data.items())[:limit]:
+            ts = _parse_timestamp(date_str)
+            if ts is None:
+                continue
             normalized.append(
                 {
                     "open": float(values["1. open"]),
@@ -225,7 +252,7 @@ class AlphaVantageProvider:
                     "low": float(values["3. low"]),
                     "close": float(values["4. close"]),
                     "volume": float(values.get("5. volume", 0.0)),
-                    "timestamp": datetime.fromisoformat(date_str).timestamp(),
+                    "timestamp": ts,
                 }
             )
         normalized.sort(key=lambda row: row["timestamp"])

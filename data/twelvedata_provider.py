@@ -17,6 +17,27 @@ LOG_SAMPLE_LIMIT = 5
 _warn_counts: dict[str, int] = defaultdict(int)
 _NO_DATA = object()
 RATE_LIMIT_COOLDOWN = 60
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:  # pragma: no cover - py<3.9
+    ZoneInfo = None
+
+_DEFAULT_TZ = ZoneInfo("America/New_York") if ZoneInfo else timezone.utc
+
+
+def _parse_timestamp(value: str | None) -> float | None:
+    if not value:
+        return None
+    raw = str(value)
+    if raw.endswith("Z"):
+        raw = raw.replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=_DEFAULT_TZ)
+    return parsed.timestamp()
 
 
 def _warn_sample(reason: str, message: str, *, level: int = logging.WARNING) -> None:
@@ -185,6 +206,9 @@ class TwelveDataProvider:
             return cached
         normalized: List[Dict[str, float]] = []
         for row in reversed(values):  # API returns newest first
+            ts = _parse_timestamp(row.get("datetime"))
+            if ts is None:
+                continue
             normalized.append(
                 {
                     "open": float(row["open"]),
@@ -192,7 +216,7 @@ class TwelveDataProvider:
                     "low": float(row["low"]),
                     "close": float(row["close"]),
                     "volume": float(row.get("volume", 0.0)),
-                    "timestamp": datetime.fromisoformat(row["datetime"]).timestamp(),
+                    "timestamp": ts,
                 }
             )
         if normalized:
@@ -235,6 +259,9 @@ class TwelveDataProvider:
             return cached
         normalized: List[Dict[str, float]] = []
         for row in reversed(values):  # API returns newest first
+            ts = _parse_timestamp(row.get("datetime"))
+            if ts is None:
+                continue
             normalized.append(
                 {
                     "open": float(row["open"]),
@@ -242,7 +269,7 @@ class TwelveDataProvider:
                     "low": float(row["low"]),
                     "close": float(row["close"]),
                     "volume": float(row.get("volume", 0.0)),
-                    "timestamp": datetime.fromisoformat(row["datetime"]).timestamp(),
+                    "timestamp": ts,
                 }
             )
         if normalized:
@@ -342,6 +369,9 @@ class TwelveDataProvider:
             bars: List[Dict[str, float]] = []
             for row in reversed(values):
                 try:
+                    ts = _parse_timestamp(row.get("datetime"))
+                    if ts is None:
+                        continue
                     bars.append(
                         {
                             "open": float(row["open"]),
@@ -349,7 +379,7 @@ class TwelveDataProvider:
                             "low": float(row["low"]),
                             "close": float(row["close"]),
                             "volume": float(row.get("volume", 0.0)),
-                            "timestamp": datetime.fromisoformat(row["datetime"]).timestamp(),
+                            "timestamp": ts,
                         }
                     )
                 except Exception:

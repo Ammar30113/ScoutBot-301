@@ -13,10 +13,12 @@ from ta.trend import MACD
 from xgboost import XGBClassifier
 
 from core.logger import get_logger
+from core.config import get_settings
 from data.price_router import PriceRouter
 from strategy.technicals import atr_bands, compute_atr
 
 logger = get_logger(__name__)
+settings = get_settings()
 
 MODEL_PATH = Path("models/momentum_sentiment_model.pkl")
 FEATURE_COLUMNS = [
@@ -39,10 +41,12 @@ _warn_counts: dict[str, int] = defaultdict(int)
 class MLClassifier:
     def __init__(self, model_path: Path = MODEL_PATH) -> None:
         self.model_path = model_path
+        self.synthetic = False
         self.model = self._load_or_train_model()
 
     def _load_or_train_model(self) -> XGBClassifier:
         self.model_path.parent.mkdir(parents=True, exist_ok=True)
+        self.synthetic = False
         if self.model_path.exists():
             try:
                 model = joblib.load(self.model_path)
@@ -50,6 +54,7 @@ class MLClassifier:
                     raise ValueError("Stale model feature shape; retraining")
                 # sanity check predict_proba shape
                 _ = model.predict_proba(np.zeros((1, len(FEATURE_COLUMNS))))
+                self.synthetic = bool(getattr(model, "synthetic", False))
                 logger.info("Loaded existing ML model successfully.")
                 return model
             except Exception as exc:  # pragma: no cover - defensive log
@@ -118,6 +123,7 @@ class MLClassifier:
 
         if not frames:
             logger.warning("No intraday training data available; training fallback synthetic model.")
+            self.synthetic = True
             rng = np.random.default_rng(42)
             samples = 200
             X = rng.normal(size=(samples, len(FEATURE_COLUMNS)))
@@ -132,12 +138,14 @@ class MLClassifier:
                 eval_metric="logloss",
             )
             model.fit(X, y)
+            model.synthetic = True
             return model
 
         full = pd.concat(frames, ignore_index=True)
         X = full[FEATURE_COLUMNS]
         y = full["target"]
 
+        self.synthetic = False
         model = XGBClassifier(
             n_estimators=200,
             max_depth=5,
@@ -147,6 +155,7 @@ class MLClassifier:
             eval_metric="logloss",
         )
         model.fit(X, y)
+        model.synthetic = False
         return model
 
     def predict(self, features: Dict[str, float], crash_mode: bool = False) -> float:
@@ -207,6 +216,7 @@ def _compute_vwap(df: pd.DataFrame) -> pd.Series:
 
 
 _ml_classifier: MLClassifier | None = None
+_synthetic_warned = False
 
 
 def get_classifier() -> MLClassifier:
@@ -219,6 +229,14 @@ def get_classifier() -> MLClassifier:
 def generate_predictions(universe: Iterable[str], crash_mode: bool = False) -> List[Tuple[str, float, Dict[str, float]]]:
     predictions: List[Tuple[str, float, Dict[str, float]]] = []
     classifier = get_classifier()
+    if classifier.synthetic and not settings.allow_synthetic_ml:
+        global _synthetic_warned
+        if not _synthetic_warned:
+            logger.warning(
+                "Synthetic ML model in use; ML signals disabled. Set ALLOW_SYNTHETIC_ML=true to override."
+            )
+            _synthetic_warned = True
+        return predictions
     for symbol in universe:
         try:
             bars = price_router.get_aggregates(symbol, window=120)

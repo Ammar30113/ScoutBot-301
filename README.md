@@ -43,6 +43,7 @@ Set the following variables inside Railway (or a local `.env` file - the project
 | `USE_SENTIMENT` | Toggle sentiment system (default `true`) |
 | `USE_TWITTER_NEWS` | Toggle Twitter headlines in sentiment (default `false`) |
 | `TWITTER_BEARER_TOKEN` | Required if `USE_TWITTER_NEWS=true` |
+| `ALLOW_SYNTHETIC_ML` | Allow ML signals when the model is trained on synthetic data (default `false`) |
 | `TWITTER_ALLOWED_ACCOUNTS` | Comma-separated handles to scan (defaults in `core/config.py`) |
 | `TWITTER_MAX_POSTS_PER_DAY` | Daily tweet budget (default `3`) |
 | `TWITTER_TWEETS_PER_ACCOUNT` | Max tweets per account per day (default `1`) |

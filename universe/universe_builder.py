@@ -192,14 +192,13 @@ def _passes_filters(symbol: str, frame: pd.DataFrame) -> Optional[dict]:
     return {"symbol": symbol, "liquidity": avg_dollar_vol}
 
 
-def get_universe() -> list[str]:
-    """Build universe via liquidity/volatility/market-cap filters."""
+def _build_universe_from_candidates(candidates: list[str], *, label: str | None = None) -> list[str]:
+    """Build universe from a provided candidate list."""
 
     _skip_counts.clear()
     _skip_sample_counts.clear()
-    candidates = _filter_symbols(_load_candidates())
-    total_candidates = len(candidates)
-    logger.info("Universe: fetched %s candidates", total_candidates)
+    label_suffix = f" ({label})" if label else ""
+    logger.info("Universe: fetched %s candidates%s", len(candidates), label_suffix)
     passed: List[dict] = []
 
     daily_bars_map = price_router.get_daily_bars_batch(candidates, limit=60) if candidates else {}
@@ -243,12 +242,28 @@ def get_universe() -> list[str]:
         if any(count > SKIP_LOG_SAMPLE_LIMIT for count in _skip_counts.values()):
             logger.info("Skip logs sampled (first %s per reason shown)", SKIP_LOG_SAMPLE_LIMIT)
 
-    if not final_symbols:
-        fallback = _csv_universe(settings.universe_fallback_csv)
-        if fallback:
-            logger.warning("Universe empty after filters; falling back to %s (%s symbols)", settings.universe_fallback_csv, len(fallback))
-            return fallback
+    return final_symbols
+
+
+def get_universe() -> list[str]:
+    """Build universe via liquidity/volatility/market-cap filters."""
+
+    candidates = _filter_symbols(_load_candidates())
+    final_symbols = _build_universe_from_candidates(candidates)
+    if final_symbols:
+        return final_symbols
+
+    fallback = _filter_symbols(_csv_universe(settings.universe_fallback_csv))
+    if not fallback:
         logger.warning("Universe unavailable: no candidates and no fallback CSV")
         return []
+    if set(fallback) == set(candidates):
+        logger.warning("Universe empty after filters; skipping cycle")
+        return []
 
-    return final_symbols
+    logger.warning("Universe empty after filters; retrying fallback universe (%s symbols)", len(fallback))
+    final_symbols = _build_universe_from_candidates(fallback, label="fallback")
+    if final_symbols:
+        return final_symbols
+    logger.warning("Universe empty after fallback filters; skipping cycle")
+    return []
