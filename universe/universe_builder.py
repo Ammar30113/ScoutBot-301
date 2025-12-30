@@ -269,6 +269,12 @@ def get_universe() -> list[str]:
         logger.warning("Universe unavailable: no candidates and no fallback CSV")
         return []
     if set(fallback) == set(candidates):
+        if settings.universe_allow_unfiltered_fallback:
+            max_size = max(int(settings.max_universe_size or 0), 0)
+            if max_size:
+                fallback = fallback[:max_size]
+            logger.warning("Universe empty after filters; using unfiltered fallback (%s symbols)", len(fallback))
+            return fallback
         logger.warning("Universe empty after filters; skipping cycle")
         return []
 
@@ -276,5 +282,11 @@ def get_universe() -> list[str]:
     final_symbols = _build_universe_from_candidates(fallback, label="fallback")
     if final_symbols:
         return final_symbols
+    if settings.universe_allow_unfiltered_fallback and fallback:
+        max_size = max(int(settings.max_universe_size or 0), 0)
+        if max_size:
+            fallback = fallback[:max_size]
+        logger.warning("Universe empty after fallback filters; using unfiltered fallback (%s symbols)", len(fallback))
+        return fallback
     logger.warning("Universe empty after fallback filters; skipping cycle")
     return []

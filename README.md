@@ -34,6 +34,8 @@ Set the following variables inside Railway (or a local `.env` file - the project
 | `MODE` | Trading mode (`paper` or `live`, default `paper`) |
 | `ALLOW_LIVE_TRADING` | Explicitly enable live trading (default `false`) |
 | `ALLOW_ALPACA_DAILY` | Allow Alpaca daily bars; when unset, Alpaca daily is used only if no external daily provider is configured |
+| `REQUIRE_CRASH_DATA` | Require crash detector data to trade; when false, stale/missing SPY data disables crash gating only (default `false`) |
+| `EXECUTION_HALT_COOLDOWN_SECONDS` | Auto-clear new-entry halt after this many seconds (default `300`) |
 | `STRIP_RATE_LIMITED_KEYS` | Disable providers after rate-limit errors (default `false`) |
 | `TWELVEDATA_API_KEY` | Optional fallback data |
 | `ALPHAVANTAGE_API_KEY` | Optional fallback data |
@@ -45,12 +47,14 @@ Set the following variables inside Railway (or a local `.env` file - the project
 | `USE_TWITTER_NEWS` | Toggle Twitter headlines in sentiment (default `false`) |
 | `TWITTER_BEARER_TOKEN` | Required if `USE_TWITTER_NEWS=true` |
 | `ALLOW_SYNTHETIC_ML` | Allow ML signals when the model is trained on synthetic data (default `false`) |
+| `ALLOW_FALLBACK_ML` | Allow heuristic ML scoring when synthetic ML is blocked (default `true`) |
 | `TWITTER_ALLOWED_ACCOUNTS` | Comma-separated handles to scan (defaults in `core/config.py`) |
 | `TWITTER_MAX_POSTS_PER_DAY` | Daily tweet budget (default `3`) |
 | `TWITTER_TWEETS_PER_ACCOUNT` | Max tweets per account per day (default `1`) |
 | `SENTIMENT_CACHE_TTL` | Sentiment cache TTL seconds (default `300`) |
 | `UNIVERSE_FALLBACK_CSV` | CSV fallback path (default `universe/fallback_universe.csv`) |
 | `UNIVERSE_FALLBACK_ONLY` | Use fallback CSV only (skip filters/API calls, default `false`) |
+| `UNIVERSE_ALLOW_UNFILTERED_FALLBACK` | Use fallback CSV without filters when filters yield no symbols (default `true`) |
 | `MIN_DOLLAR_VOLUME` | Min avg daily dollar volume (default `8000000`) |
 | `MIN_VOLUME_HISTORY_DAYS` | Lookback days for dollar-volume filter (default `3`) |
 | `MIN_MKT_CAP` | Min market cap filter (default `300000000`) |

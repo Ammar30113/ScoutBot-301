@@ -91,6 +91,8 @@ class Settings:
     allow_alpaca_daily: bool | None = field(default_factory=lambda: _get_optional_bool("ALLOW_ALPACA_DAILY"))
     strip_rate_limited_keys: bool = field(default_factory=lambda: _get_bool("STRIP_RATE_LIMITED_KEYS", False))
     skip_daily_on_rate_limit: bool = field(default_factory=lambda: _get_bool("SKIP_DAILY_ON_RATE_LIMIT", True))
+    require_crash_data: bool = field(default_factory=lambda: _get_bool("REQUIRE_CRASH_DATA", False))
+    execution_halt_cooldown_seconds: int = field(default_factory=lambda: _get_int("EXECUTION_HALT_COOLDOWN_SECONDS", 300))
 
     twelvedata_api_key: str = field(default_factory=lambda: os.getenv("TWELVEDATA_API_KEY") or os.getenv("TWELVEDATA_KEY", ""))
     alphavantage_api_key: str = field(
@@ -107,6 +109,7 @@ class Settings:
     use_twitter_news: bool = field(default_factory=lambda: USE_TWITTER_NEWS)
     twitter_bearer_token: str = field(default_factory=lambda: os.getenv("TWITTER_BEARER_TOKEN", ""))
     allow_synthetic_ml: bool = field(default_factory=lambda: _get_bool("ALLOW_SYNTHETIC_ML", False))
+    allow_fallback_ml: bool = field(default_factory=lambda: _get_bool("ALLOW_FALLBACK_ML", True))
     twitter_allowed_accounts: list[str] = field(
         default_factory=lambda: _get_csv("TWITTER_ALLOWED_ACCOUNTS", DEFAULT_TWITTER_ALLOWED_ACCOUNTS)
     )
@@ -117,6 +120,9 @@ class Settings:
         default_factory=lambda: Path(os.getenv("UNIVERSE_FALLBACK_CSV", "universe/fallback_universe.csv"))
     )
     universe_fallback_only: bool = field(default_factory=lambda: _get_bool("UNIVERSE_FALLBACK_ONLY", False))
+    universe_allow_unfiltered_fallback: bool = field(
+        default_factory=lambda: _get_bool("UNIVERSE_ALLOW_UNFILTERED_FALLBACK", True)
+    )
     min_dollar_volume: float = field(default_factory=lambda: float(os.getenv("MIN_DOLLAR_VOLUME", 8_000_000)))
     min_mkt_cap: float = field(default_factory=lambda: float(os.getenv("MIN_MKT_CAP", 300_000_000)))
     max_mkt_cap: float = field(default_factory=lambda: float(os.getenv("MAX_MKT_CAP", 5_000_000_000)))

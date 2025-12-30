@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from datetime import datetime, timezone
 from typing import Literal, TypedDict
 
@@ -21,6 +22,7 @@ price_router = PriceRouter()
 
 _halt_new_entries = False
 _halt_reason = ""
+_halt_until = 0.0
 
 
 class TradeSignal(TypedDict, total=False):
@@ -47,10 +49,26 @@ class ExecutionResult(TypedDict):
 
 
 def _set_halt(reason: str) -> None:
-    global _halt_new_entries, _halt_reason
+    global _halt_new_entries, _halt_reason, _halt_until
     _halt_new_entries = True
     _halt_reason = reason
-    logger.error("Execution halted: %s", reason)
+    cooldown = max(int(settings.execution_halt_cooldown_seconds or 0), 0)
+    _halt_until = time.time() + cooldown if cooldown else 0.0
+    if cooldown:
+        logger.error("Execution halted: %s (cooldown=%ss)", reason, cooldown)
+    else:
+        logger.error("Execution halted: %s", reason)
+
+
+def _reset_halt_if_ready() -> None:
+    global _halt_new_entries, _halt_reason, _halt_until
+    if not _halt_new_entries:
+        return
+    if _halt_until and time.time() >= _halt_until:
+        _halt_new_entries = False
+        _halt_reason = ""
+        _halt_until = 0.0
+        logger.warning("Execution halt cleared; resuming new entries")
 
 
 def _log_skip(symbol: str, action: str, reason: str | None) -> ExecutionResult:
@@ -101,6 +119,7 @@ def execute_signals(signals: list[TradeSignal], *, crash_mode: bool = False) -> 
     if not signals:
         logger.info("No signals to execute")
         return []
+    _reset_halt_if_ready()
     results: list[ExecutionResult] = []
     for signal in signals:
         results.append(execute_signal(signal, crash_mode=crash_mode))
@@ -116,6 +135,7 @@ def execute_signal(signal: TradeSignal, *, crash_mode: bool = False) -> Executio
     if not symbol:
         return _log_skip("", action, "missing_symbol")
 
+    _reset_halt_if_ready()
     if action in ("SELL", "CLOSE"):
         close_reason = reason or ("sell_signal_close_only" if action == "SELL" else None)
         return close_position(symbol, reason=close_reason)

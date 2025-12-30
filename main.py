@@ -76,15 +76,21 @@ def microcap_cycle():
             logger.info(f"P&L penalty for this cycle: {pnl_penalty}")
             crash, drop, data_age = get_crash_state()
             if data_age is None:
-                logger.warning("Intraday data check failed; skipping cycle")
-                continue
-            if data_age > settings.intraday_stale_seconds:
+                logger.warning("Intraday data check failed; crash gate disabled for this cycle")
+                if settings.require_crash_data:
+                    continue
+                crash = False
+                drop = 0.0
+            elif data_age > settings.intraday_stale_seconds:
                 logger.warning(
-                    "Intraday data stale (age %.1f min > %.1f min); skipping cycle",
+                    "Intraday data stale (age %.1f min > %.1f min); crash gate disabled for this cycle",
                     data_age / 60.0,
                     settings.intraday_stale_seconds / 60.0,
                 )
-                continue
+                if settings.require_crash_data:
+                    continue
+                crash = False
+                drop = 0.0
             logger.info("Crash mode = %s (SPY 5min drop = %.3f)", crash, drop)
             logger.info("=== Crash Mode %s ===", "ACTIVE" if crash else "OFF")
 

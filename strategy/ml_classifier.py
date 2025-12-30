@@ -215,6 +215,29 @@ def _compute_vwap(df: pd.DataFrame) -> pd.Series:
     return dollar_volume / cumulative_volume
 
 
+def _heuristic_prob(features: Dict[str, float]) -> float:
+    rsi = float(features.get("rsi", 50.0) or 50.0)
+    rsi_score = 1.0 - min(abs(rsi - 55.0) / 25.0, 1.0)
+    macd = float(features.get("macd", 0.0) or 0.0)
+    macd_hist = float(features.get("macd_hist", 0.0) or 0.0)
+    vol_ratio = float(features.get("vol_ratio", 1.0) or 1.0)
+    slope = float(features.get("slope", 0.0) or 0.0)
+
+    vol_score = min(max((vol_ratio - 0.8) / 0.7, 0.0), 1.0)
+    macd_score = 1.0 if macd > 0 else 0.0
+    macd_hist_score = 1.0 if macd_hist > 0 else 0.0
+    slope_score = 1.0 if slope > 0 else 0.0
+
+    if not np.isfinite(rsi_score):
+        rsi_score = 0.0
+    if not np.isfinite(vol_score):
+        vol_score = 0.0
+    score = 0.3 * rsi_score + 0.2 * macd_score + 0.2 * macd_hist_score + 0.2 * vol_score + 0.1 * slope_score
+    if not np.isfinite(score):
+        score = 0.0
+    return float(np.clip(0.15 + 0.7 * score, 0.0, 1.0))
+
+
 _ml_classifier: MLClassifier | None = None
 _synthetic_warned = False
 
@@ -229,14 +252,22 @@ def get_classifier() -> MLClassifier:
 def generate_predictions(universe: Iterable[str], crash_mode: bool = False) -> List[Tuple[str, float, Dict[str, float]]]:
     predictions: List[Tuple[str, float, Dict[str, float]]] = []
     classifier = get_classifier()
+    use_heuristic = False
     if classifier.synthetic and not settings.allow_synthetic_ml:
         global _synthetic_warned
+        if not settings.allow_fallback_ml:
+            if not _synthetic_warned:
+                logger.warning(
+                    "Synthetic ML model in use; ML signals disabled. Set ALLOW_SYNTHETIC_ML=true to override."
+                )
+                _synthetic_warned = True
+            return predictions
+        use_heuristic = True
         if not _synthetic_warned:
             logger.warning(
-                "Synthetic ML model in use; ML signals disabled. Set ALLOW_SYNTHETIC_ML=true to override."
+                "Synthetic ML model in use; heuristic fallback enabled. Set ALLOW_FALLBACK_ML=false to disable."
             )
             _synthetic_warned = True
-        return predictions
     for symbol in universe:
         try:
             bars = price_router.get_aggregates(symbol, window=120)
@@ -256,7 +287,11 @@ def generate_predictions(universe: Iterable[str], crash_mode: bool = False) -> L
         features = build_features(price_frame)
         if crash_mode:
             features = {k: (0.0 if v is None or not np.isfinite(v) else v) for k, v in features.items()}
-        prob = classifier.predict(features, crash_mode=crash_mode)
+        if use_heuristic:
+            prob = _heuristic_prob(features)
+            logger.info("Heuristic ML probability for %s -> %.3f", symbol, prob)
+        else:
+            prob = classifier.predict(features, crash_mode=crash_mode)
+            logger.info("ML probability for %s -> %.3f", symbol, prob)
         predictions.append((symbol, prob, features))
-        logger.info("ML probability for %s → %.3f", symbol, prob)
     return predictions
