@@ -23,6 +23,7 @@ _alpha = AlphaVantageProvider() if settings.alphavantage_api_key else None
 _twelve = TwelveDataProvider() if settings.twelvedata_api_key else None
 
 SKIP_LOG_SAMPLE_LIMIT = 5
+CANDIDATE_LIMIT_MULTIPLIER = 10
 
 CANDIDATE_FILES = [
     Path("universe/russell3000.csv"),
@@ -199,6 +200,16 @@ def _build_universe_from_candidates(candidates: list[str], *, label: str | None 
     _skip_sample_counts.clear()
     label_suffix = f" ({label})" if label else ""
     logger.info("Universe: fetched %s candidates%s", len(candidates), label_suffix)
+    candidate_limit = max(int(settings.universe_candidate_limit or 0), 0)
+    if not candidate_limit:
+        candidate_limit = max(int(settings.max_universe_size or 0) * CANDIDATE_LIMIT_MULTIPLIER, 0)
+    if candidate_limit and len(candidates) > candidate_limit:
+        logger.warning(
+            "Universe: limiting candidates to %s (from %s) to reduce API load",
+            candidate_limit,
+            len(candidates),
+        )
+        candidates = candidates[:candidate_limit]
     passed: List[dict] = []
 
     daily_bars_map = price_router.get_daily_bars_batch(candidates, limit=60) if candidates else {}
