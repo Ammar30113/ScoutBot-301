@@ -71,7 +71,7 @@ def clear_entry_timestamp(symbol: str) -> None:
         save_state(state)
 
 
-def sync_entry_timestamps(open_symbols: Iterable[str], default_timestamp: float) -> Dict[str, float]:
+def sync_entry_timestamps(open_symbols: Iterable[str], default_timestamp: float | None = None) -> Dict[str, float]:
     state = load_state()
     open_set = {sym.upper() for sym in open_symbols if sym}
     current: Dict[str, float] = {}
@@ -85,6 +85,8 @@ def sync_entry_timestamps(open_symbols: Iterable[str], default_timestamp: float)
     changed = current != (state.entry_timestamps or {})
     for sym in open_set:
         if sym not in current:
+            if default_timestamp is None:
+                continue
             current[sym] = float(default_timestamp)
             changed = True
     if changed:

@@ -8,7 +8,13 @@ from core.config import get_settings
 from universe.universe_builder import get_universe
 from strategy.signal_router import route_signals
 from trader.allocation import allocate_positions
-from trader.execution_adapter import execute_signals, close_position, list_positions, trading_client
+from trader.execution_adapter import (
+    execute_signals,
+    close_position,
+    list_positions,
+    reconcile_pending_entries,
+    trading_client,
+)
 from trader import risk_model
 from data.price_router import PriceRouter
 from strategy.crash_detector import get_crash_state
@@ -141,15 +147,18 @@ def microcap_cycle():
                             "requested_qty": shares,
                             "reason": metadata.get("reason") or metadata.get("type"),
                             "score": metadata.get("score"),
+                            "stop_loss_pct": metadata.get("stop_loss_pct"),
+                            "take_profit_pct": metadata.get("take_profit_pct"),
                         }
                     )
                 execute_signals(trade_signals, crash_mode=crash)
 
+            reconcile_pending_entries()
             # Exit checks for existing positions
             open_positions = list_positions()
             entry_ts_map = sync_entry_timestamps(
                 [pos.symbol for pos in open_positions],
-                datetime.now(timezone.utc).timestamp(),
+                default_timestamp=None,
             )
             for pos in open_positions:
                 symbol_key = pos.symbol.upper()

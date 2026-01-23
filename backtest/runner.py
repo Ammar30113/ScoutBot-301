@@ -67,12 +67,18 @@ class BacktestRunner:
         initial_cash: float = 100_000.0,
         step_minutes: int = 5,
         respect_market_hours: bool = True,
+        slippage_bps: float = 0.0,
+        fee_bps: float = 0.0,
+        partial_fill_ratio: float = 1.0,
     ) -> None:
         self.feed = feed
         self.symbols = list(symbols) if symbols else list(feed.symbols())
         self.initial_cash = float(initial_cash)
         self.step_minutes = max(int(step_minutes), 1)
         self.respect_market_hours = bool(respect_market_hours)
+        self.slippage_bps = float(slippage_bps)
+        self.fee_bps = float(fee_bps)
+        self.partial_fill_ratio = float(partial_fill_ratio)
 
     def run(self, start_ts: Optional[float] = None, end_ts: Optional[float] = None) -> BacktestResult:
         start, end = self.feed.available_range()
@@ -83,7 +89,12 @@ class BacktestRunner:
 
         router = BacktestPriceRouter(self.feed)
         _patch_router(router)
-        broker = SimBroker(cash=self.initial_cash)
+        broker = SimBroker(
+            cash=self.initial_cash,
+            slippage_bps=self.slippage_bps,
+            fee_bps=self.fee_bps,
+            partial_fill_ratio=self.partial_fill_ratio,
+        )
         equity_curve: List[Dict[str, float]] = []
         context = SimpleNamespace(pnl_penalty=0.0)
         pnl_tracker = _PnLTracker(initial_equity=self.initial_cash)

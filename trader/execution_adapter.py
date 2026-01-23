@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import time
 from datetime import datetime, timezone
 from typing import Literal, TypedDict
@@ -23,6 +24,9 @@ price_router = PriceRouter()
 _halt_new_entries = False
 _halt_reason = ""
 _halt_until = 0.0
+_pending_entries: dict[str, dict[str, object]] = {}
+_pending_entry_ttl_seconds = 3600
+_fill_slippage_warn_pct = 0.003
 
 
 class TradeSignal(TypedDict, total=False):
@@ -69,6 +73,127 @@ def _reset_halt_if_ready() -> None:
         _halt_reason = ""
         _halt_until = 0.0
         logger.warning("Execution halt cleared; resuming new entries")
+
+
+def _coerce_timestamp(value) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value.timestamp()
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return None
+        if raw.endswith("Z"):
+            raw = raw.replace("Z", "+00:00")
+        try:
+            return datetime.fromisoformat(raw).timestamp()
+        except ValueError:
+            return None
+    return None
+
+
+def _coerce_float(value) -> float | None:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(parsed):
+        return None
+    return parsed
+
+
+def _track_pending_entry(order_id: str | None, symbol: str, expected_price: float | None) -> None:
+    if not order_id:
+        return
+    if not _can_fetch_orders():
+        logger.warning("Order lookup unavailable; using submit timestamp for %s", symbol)
+        set_entry_timestamp(symbol, datetime.now(timezone.utc).timestamp())
+        return
+    _pending_entries[order_id] = {
+        "symbol": symbol,
+        "submitted_at": time.time(),
+        "expected_price": expected_price,
+    }
+
+
+def _can_fetch_orders() -> bool:
+    if trading_client is None:
+        return False
+    return callable(getattr(trading_client, "get_order_by_id", None)) or callable(getattr(trading_client, "get_order", None))
+
+
+def _fetch_order(order_id: str):
+    if trading_client is None:
+        return None
+    getter = getattr(trading_client, "get_order_by_id", None)
+    if callable(getter):
+        try:
+            return getter(order_id)
+        except Exception as exc:  # pragma: no cover - network guard
+            logger.warning("Unable to fetch order %s: %s", order_id, exc)
+            return None
+    getter = getattr(trading_client, "get_order", None)
+    if callable(getter):
+        try:
+            return getter(order_id)
+        except Exception as exc:  # pragma: no cover - network guard
+            logger.warning("Unable to fetch order %s: %s", order_id, exc)
+            return None
+    return None
+
+
+def reconcile_pending_entries() -> None:
+    if trading_client is None or not _pending_entries:
+        return
+    now = time.time()
+    for order_id, payload in list(_pending_entries.items()):
+        submitted_at = _coerce_float(payload.get("submitted_at")) or 0.0
+        if submitted_at and (now - submitted_at) > _pending_entry_ttl_seconds:
+            logger.warning("Pending entry %s expired after %.1f minutes", order_id, (now - submitted_at) / 60.0)
+            _pending_entries.pop(order_id, None)
+            continue
+        order = _fetch_order(order_id)
+        if order is None:
+            continue
+        status = str(getattr(order, "status", "") or "").lower()
+        filled_at = _coerce_timestamp(getattr(order, "filled_at", None))
+        if filled_at is None and status in ("filled", "partially_filled"):
+            filled_at = now
+        if filled_at is not None:
+            symbol = str(payload.get("symbol") or "").upper()
+            if symbol:
+                set_entry_timestamp(symbol, filled_at)
+                fill_price = _coerce_float(getattr(order, "filled_avg_price", None))
+                if fill_price is not None:
+                    expected_price = _coerce_float(payload.get("expected_price"))
+                    if expected_price and expected_price > 0:
+                        slippage_pct = abs(fill_price - expected_price) / expected_price
+                        if slippage_pct >= _fill_slippage_warn_pct:
+                            logger.warning(
+                                "Fill slippage for %s: expected %.4f got %.4f (%.2f%%)",
+                                symbol,
+                                expected_price,
+                                fill_price,
+                                slippage_pct * 100.0,
+                            )
+                    log_trade(
+                        {
+                            "symbol": symbol,
+                            "event": "fill",
+                            "status": "filled",
+                            "price": fill_price,
+                            "order_id": order_id,
+                        }
+                    )
+            _pending_entries.pop(order_id, None)
+            continue
+        if status in ("canceled", "rejected", "expired"):
+            _pending_entries.pop(order_id, None)
 
 
 def _log_skip(symbol: str, action: str, reason: str | None) -> ExecutionResult:
@@ -275,7 +400,12 @@ def execute_signal(signal: TradeSignal, *, crash_mode: bool = False) -> Executio
     try:
         submitted = trading_client.submit_order(order)
         order_id = getattr(submitted, "id", None)
-        set_entry_timestamp(symbol, datetime.now(timezone.utc).timestamp())
+        status = str(getattr(submitted, "status", "") or "").lower()
+        filled_at = _coerce_timestamp(getattr(submitted, "filled_at", None))
+        if filled_at is not None or status == "filled":
+            set_entry_timestamp(symbol, filled_at or datetime.now(timezone.utc).timestamp())
+        else:
+            _track_pending_entry(order_id, symbol, entry_price)
         log_trade(
             {
                 "symbol": symbol,

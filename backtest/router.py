@@ -20,7 +20,7 @@ class BacktestPriceRouter:
             raise RuntimeError(f"Backtest price unavailable for {symbol}")
         return price
 
-    def get_aggregates(self, symbol: str, window: int = 60) -> List[Dict[str, float]]:
+    def get_aggregates(self, symbol: str, window: int = 60, *, allow_stale: bool = False) -> List[Dict[str, float]]:
         end_ts = self.feed.cursor
         start_ts = end_ts - float(window) * 60.0
         raw = self.feed.get_raw_bars(symbol, start_ts, end_ts)
@@ -28,6 +28,26 @@ class BacktestPriceRouter:
         if frame is None or frame.empty:
             return []
         return frame.to_dict("records")
+
+    def bars_age_seconds(self, bars) -> float | None:
+        if not bars:
+            return None
+        latest = None
+        for item in bars:
+            if not isinstance(item, dict):
+                continue
+            ts = item.get("timestamp")
+            if ts is None:
+                continue
+            try:
+                ts_value = float(ts)
+            except (TypeError, ValueError):
+                continue
+            if latest is None or ts_value > latest:
+                latest = ts_value
+        if latest is None:
+            return None
+        return max(float(self.feed.cursor) - latest, 0.0)
 
     def get_daily_aggregates(self, symbol: str, limit: int = 60) -> List[Dict[str, float]]:
         end_ts = self.feed.cursor
