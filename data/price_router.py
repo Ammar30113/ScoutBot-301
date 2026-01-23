@@ -208,6 +208,18 @@ class PriceRouter:
         last_error: Exception | None = None
         bars_needed = max(int(math.ceil(window / 5)), 1)
         stale_candidate: tuple[float, str, List[Dict[str, float]]] | None = None
+        cache_key = f"intraday_bars:{symbol.upper()}:{bars_needed}"
+        cached_bars = cache.get(cache_key) or []
+        cached_age = self._bars_age_seconds(cached_bars)
+        if cached_bars:
+            if cached_age is None:
+                if allow_stale:
+                    stale_candidate = (0.0, "cache", cached_bars)
+            elif cached_age <= settings.intraday_stale_seconds:
+                self._set_last_provider(symbol, "intraday", "cache")
+                return cached_bars
+            elif allow_stale:
+                stale_candidate = (cached_age, "cache", cached_bars)
         for provider in self.providers:
             provider_name = provider.__class__.__name__
             try:
@@ -240,7 +252,9 @@ class PriceRouter:
                         last_error = RuntimeError("stale intraday data")
                         continue
                     self._set_last_provider(symbol, "intraday", provider_name)
-                    return frame.to_dict("records")
+                    records = frame.to_dict("records")
+                    cache.set(cache_key, records, settings.cache_ttl)
+                    return records
             except Exception as exc:  # pragma: no cover - network guard
                 logger.warning("%s aggregates failed for %s: %s", provider_name, symbol, exc)
                 if "429" in str(exc):

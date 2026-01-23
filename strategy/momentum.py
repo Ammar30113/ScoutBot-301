@@ -12,6 +12,7 @@ logger = get_logger(__name__)
 router = PriceRouter()
 
 MOMENTUM_TOP_K = 10
+MOMENTUM_WINDOW_MINUTES = 120
 LOG_SAMPLE_LIMIT = 5
 _warn_counts: dict[str, int] = defaultdict(int)
 
@@ -31,7 +32,7 @@ def compute_momentum_scores(
     scores: List[Tuple[str, float]] = []
     for symbol in symbols:
         try:
-            bars = router.get_aggregates(symbol, window=60)
+            bars = router.get_aggregates(symbol, window=MOMENTUM_WINDOW_MINUTES)
         except Exception as exc:  # pragma: no cover - network guard
             _warn_sample(symbol, exc)
             continue

@@ -92,6 +92,8 @@ class TwelveDataProvider:
 
     def _rate_limit_seconds(self, message: str) -> int:
         msg = (message or "").lower()
+        if any(marker in msg for marker in ("per minute", "minute", "per-second", "per second")):
+            return RATE_LIMIT_COOLDOWN
         if any(marker in msg for marker in ("month", "monthly")):
             return self._seconds_until_next_month()
         if any(marker in msg for marker in ("per day", "daily", "day", "credits", "plan")):
