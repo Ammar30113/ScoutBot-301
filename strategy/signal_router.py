@@ -106,7 +106,8 @@ def route_signals(universe: List[str], crash_mode: bool = False, context=None) -
     signals: List[Dict[str, float | str]] = list(filtered_orb_signals)
     for sig in filtered_orb_signals:
         _log_signal(sig)
-    max_rank = max(len(momentum_map), 1)
+    momentum_rank = {sym: idx for idx, (sym, _) in enumerate(momentum)}
+    max_rank = max(len(momentum_rank), 1)
     rate_limited: set[str] = set()
 
     for symbol, prob, features in ml_preds:
@@ -115,9 +116,10 @@ def route_signals(universe: List[str], crash_mode: bool = False, context=None) -
         if symbol in rate_limited:
             continue
         time.sleep(0.05)  # stagger provider requests slightly for large universes (reduce API bursts)
-        rank_component = 1.0 - (list(momentum_map.keys()).index(symbol) / max_rank) if symbol in momentum_map else 0.0
-        ml_threshold_trend = 0.22
-        ml_threshold_reversal = 0.28
+        rank_idx = momentum_rank.get(symbol)
+        rank_component = 1.0 - (rank_idx / max_rank) if rank_idx is not None else 0.0
+        ml_threshold_trend = float(settings.ml_trend_threshold or 0.20)
+        ml_threshold_reversal = float(settings.ml_reversal_threshold or 0.26)
         if prob < ml_threshold_trend:
             continue
         regime = daily_regime_map.get(symbol)
@@ -127,9 +129,6 @@ def route_signals(universe: List[str], crash_mode: bool = False, context=None) -
         regime_label = regime.label if regime else "unknown"
         daily_atr_pct = float(regime.atr_pct) if regime else 0.0
         sentiment = 0.0
-        if settings.use_sentiment:
-            sentiment_raw = float(get_symbol_sentiment(symbol) or 0.0)
-            sentiment = (sentiment_raw + 1.0) / 2.0  # map [-1,1] to [0,1]
 
         try:
             bars = price_router.get_aggregates(symbol, window=120)
@@ -200,8 +199,14 @@ def route_signals(universe: List[str], crash_mode: bool = False, context=None) -
         momentum_base = momentum_base and (regime_score >= -0.20 or crash_mode)
         score_threshold = 0.32 - (0.05 * regime_score)
         # Sentiment contributes ~15% of the final score (within 10-25% envelope)
-        raw_score = 0.45 * rank_component + 0.25 * prob + 0.15 * sentiment + 0.15 * momentum_score
-        raw_score += 0.05 * regime_score
+        raw_score_base = 0.45 * rank_component + 0.25 * prob + 0.15 * momentum_score
+        raw_score_base += 0.05 * regime_score
+        if settings.use_sentiment:
+            max_possible = raw_score_base + 0.15
+            if max_possible > score_threshold:
+                sentiment_raw = float(get_symbol_sentiment(symbol) or 0.0)
+                sentiment = (sentiment_raw + 1.0) / 2.0  # map [-1,1] to [0,1]
+        raw_score = raw_score_base + 0.15 * sentiment
 
         # P&L penalty/boost injected from main
         pnl_penalty = context.pnl_penalty if hasattr(context, "pnl_penalty") else 0.0

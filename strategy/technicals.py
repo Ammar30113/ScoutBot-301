@@ -4,7 +4,9 @@ import pandas as pd
 from ta.momentum import RSIIndicator
 from ta.trend import MACD, SMAIndicator
 
-ENTRY_RSI_MAX = 60
+ENTRY_RSI_MIN = 38
+ENTRY_RSI_MAX = 75
+ENTRY_MACD_MIN = -0.02
 EXIT_RSI_MIN = 75
 
 
@@ -31,9 +33,9 @@ def passes_entry_filter(df: pd.DataFrame, crash_mode: bool = False) -> bool:
     vwap = compute_vwap(df).iloc[-1]
 
     # Momentum: less aggressive thresholds
-    if not (42 < rsi < 70):
+    if not (ENTRY_RSI_MIN < rsi < ENTRY_RSI_MAX):
         return False
-    if not (macd > 0):
+    if not (macd > ENTRY_MACD_MIN):
         return False
     vwap_diff = close.iloc[-1] - vwap
     if vwap_diff <= 0:

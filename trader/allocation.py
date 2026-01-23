@@ -9,6 +9,23 @@ price_router = PriceRouter()
 DAILY_BUDGET = float(os.getenv("DAILY_BUDGET_USD", 10000))
 
 
+def _signal_strength(signal) -> float:
+    if not isinstance(signal, dict):
+        return 0.0
+    for key in ("score", "prob", "reversal_score"):
+        value = signal.get(key)
+        if value is None:
+            continue
+        try:
+            strength = float(value)
+        except (TypeError, ValueError):
+            continue
+        if key == "reversal_score":
+            strength = abs(strength)
+        return min(max(strength, 0.0), 1.0)
+    return 0.0
+
+
 def allocate_positions(final_signals, crash_mode: bool = False):
     if not final_signals:
         logger.warning("No signals to allocate capital")
@@ -38,6 +55,11 @@ def allocate_positions(final_signals, crash_mode: bool = False):
             continue
 
         size = base_allocation
+        strength = _signal_strength(signal)
+        if crash_mode:
+            size *= 0.7 + (0.4 * strength)
+        else:
+            size *= 0.8 + (0.6 * strength)
         if crash_mode:
             if vol_ratio > 1.8:
                 size *= 0.6

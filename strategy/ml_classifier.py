@@ -59,12 +59,38 @@ class MLClassifier:
                 return model
             except Exception as exc:  # pragma: no cover - defensive log
                 logger.warning("Existing ML model %s invalid; retraining (%s)", self.model_path, exc)
+                if not settings.train_ml_on_startup:
+                    logger.warning("ML retraining disabled; falling back to synthetic model.")
+                    model = self._train_synthetic_model()
+                    try:
+                        joblib.dump(model, self.model_path)
+                    except Exception:
+                        pass
+                    return model
                 try:
                     os.remove(self.model_path)
                 except Exception:
                     pass
         model = self._train_model()
         joblib.dump(model, self.model_path)
+        return model
+
+    def _train_synthetic_model(self) -> XGBClassifier:
+        self.synthetic = True
+        rng = np.random.default_rng(42)
+        samples = 200
+        X = rng.normal(size=(samples, len(FEATURE_COLUMNS)))
+        y = (rng.random(size=samples) > 0.5).astype(int)
+        model = XGBClassifier(
+            n_estimators=50,
+            max_depth=3,
+            learning_rate=0.1,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            eval_metric="logloss",
+        )
+        model.fit(X, y)
+        model.synthetic = True
         return model
 
     def _train_model(self) -> XGBClassifier:
@@ -123,23 +149,7 @@ class MLClassifier:
 
         if not frames:
             logger.warning("No intraday training data available; training fallback synthetic model.")
-            self.synthetic = True
-            rng = np.random.default_rng(42)
-            samples = 200
-            X = rng.normal(size=(samples, len(FEATURE_COLUMNS)))
-            y = (rng.random(size=samples) > 0.5).astype(int)
-
-            model = XGBClassifier(
-                n_estimators=50,
-                max_depth=3,
-                learning_rate=0.1,
-                subsample=0.8,
-                colsample_bytree=0.8,
-                eval_metric="logloss",
-            )
-            model.fit(X, y)
-            model.synthetic = True
-            return model
+            return self._train_synthetic_model()
 
         full = pd.concat(frames, ignore_index=True)
         X = full[FEATURE_COLUMNS]
@@ -253,6 +263,7 @@ def generate_predictions(universe: Iterable[str], crash_mode: bool = False) -> L
     predictions: List[Tuple[str, float, Dict[str, float]]] = []
     classifier = get_classifier()
     use_heuristic = False
+    blend_weight = float(getattr(settings, "ml_heuristic_weight", 0.0) or 0.0)
     if classifier.synthetic and not settings.allow_synthetic_ml:
         global _synthetic_warned
         if not settings.allow_fallback_ml:
@@ -291,7 +302,24 @@ def generate_predictions(universe: Iterable[str], crash_mode: bool = False) -> L
             prob = _heuristic_prob(features)
             logger.info("Heuristic ML probability for %s -> %.3f", symbol, prob)
         else:
-            prob = classifier.predict(features, crash_mode=crash_mode)
-            logger.info("ML probability for %s -> %.3f", symbol, prob)
+            prob_raw = classifier.predict(features, crash_mode=crash_mode)
+            if blend_weight > 0:
+                heuristic = _heuristic_prob(features)
+                blended = heuristic * blend_weight
+                if blended > prob_raw:
+                    prob = blended
+                else:
+                    prob = prob_raw
+                prob = float(np.clip(prob, 0.0, 1.0))
+                logger.info(
+                    "ML probability for %s -> %.3f (raw=%.3f heuristic=%.3f)",
+                    symbol,
+                    prob,
+                    prob_raw,
+                    heuristic,
+                )
+            else:
+                prob = prob_raw
+                logger.info("ML probability for %s -> %.3f", symbol, prob)
         predictions.append((symbol, prob, features))
     return predictions

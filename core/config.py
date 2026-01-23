@@ -138,6 +138,7 @@ class Settings:
     twitter_bearer_token: str = field(default_factory=lambda: _get_str("TWITTER_BEARER_TOKEN", ""))
     allow_synthetic_ml: bool = field(default_factory=lambda: _get_bool("ALLOW_SYNTHETIC_ML", False))
     allow_fallback_ml: bool = field(default_factory=lambda: _get_bool("ALLOW_FALLBACK_ML", True))
+    train_ml_on_startup: bool = field(default_factory=lambda: _get_bool("TRAIN_ML_ON_STARTUP", False))
     twitter_allowed_accounts: list[str] = field(
         default_factory=lambda: _get_csv("TWITTER_ALLOWED_ACCOUNTS", DEFAULT_TWITTER_ALLOWED_ACCOUNTS)
     )
@@ -181,6 +182,9 @@ class Settings:
     atr_multiplier: float = field(default_factory=lambda: float(os.getenv("ATR_MULTIPLIER", "2.5")))
     min_confidence: float = field(default_factory=lambda: float(os.getenv("MIN_CONFIDENCE", "0.45")))
     default_timespan: str = field(default_factory=lambda: os.getenv("DEFAULT_TIMESPAN", "1day"))
+    ml_trend_threshold: float = field(default_factory=lambda: float(os.getenv("ML_TREND_THRESHOLD", "0.20")))
+    ml_reversal_threshold: float = field(default_factory=lambda: float(os.getenv("ML_REVERSAL_THRESHOLD", "0.26")))
+    ml_heuristic_weight: float = field(default_factory=lambda: float(os.getenv("ML_HEURISTIC_WEIGHT", "0.8")))
 
 
 @lru_cache(maxsize=1)
