@@ -120,7 +120,10 @@ def route_signals(universe: List[str], crash_mode: bool = False, context=None) -
         rank_component = 1.0 - (rank_idx / max_rank) if rank_idx is not None else 0.0
         ml_threshold_trend = float(settings.ml_trend_threshold or 0.20)
         ml_threshold_reversal = float(settings.ml_reversal_threshold or 0.26)
-        if prob < ml_threshold_trend:
+        momentum_score = momentum_map.get(symbol, 0.0)
+        vol_ratio = float(features.get("vol_ratio", 1.0) or 1.0)
+        ml_pass = prob >= ml_threshold_trend
+        if not ml_pass and momentum_score < 0.02 and vol_ratio < 1.1:
             continue
         regime = daily_regime_map.get(symbol)
         regime_score = float(regime.score) if regime else 0.0
@@ -153,8 +156,6 @@ def route_signals(universe: List[str], crash_mode: bool = False, context=None) -
             intraday_provider = None
             daily_provider = None
 
-        momentum_score = momentum_map.get(symbol, 0.0)
-        vol_ratio = float(features.get("vol_ratio", 1.0) or 1.0)
         vol_ok = vol_ratio > 0.20
 
         # volatility ratio via ATR relative to its recent average
@@ -190,13 +191,22 @@ def route_signals(universe: List[str], crash_mode: bool = False, context=None) -
         mid_slope = float(close.pct_change().tail(12).mean() or 0.0)
 
         momentum_base = (
-            prob >= ml_threshold_trend
+            ml_pass
             and passes_entry_filter(df, crash_mode=crash_mode)
             and vol_ok
             and short_slope > 0
             and mid_slope > -0.005
         )
         momentum_base = momentum_base and (regime_score >= -0.20 or crash_mode)
+        momentum_override = (
+            not ml_pass
+            and momentum_score > 0.02
+            and vol_ratio > 1.3
+            and passes_entry_filter(df, crash_mode=crash_mode)
+            and short_slope > 0
+            and mid_slope > 0
+        )
+        momentum_override = momentum_override and (regime_score >= 0.0 or crash_mode)
         score_threshold = 0.32 - (0.05 * regime_score)
         # Sentiment contributes ~15% of the final score (within 10-25% envelope)
         raw_score_base = 0.45 * rank_component + 0.25 * prob + 0.15 * momentum_score
@@ -211,22 +221,25 @@ def route_signals(universe: List[str], crash_mode: bool = False, context=None) -
         # P&L penalty/boost injected from main
         pnl_penalty = context.pnl_penalty if hasattr(context, "pnl_penalty") else 0.0
         final_score = raw_score - pnl_penalty
-        momentum_signal = momentum_base and final_score > score_threshold
+        momentum_signal = (momentum_base and final_score > score_threshold) or momentum_override
 
-        dip_buy_ok = short_slope < -0.20 and vol_ratio > 1.1 and prob > ml_threshold_reversal
+        dip_buy_ok = short_slope < -0.03 and vol_ratio > 1.1 and prob > ml_threshold_reversal
         dip_buy_ok = dip_buy_ok and (regime_score >= -0.35 or crash_mode)
 
         if momentum_signal:
             if reversal_allowed:
                 logger.info("Reversal candidate for %s but overridden by momentum", symbol)
                 logger.info("Momentum dominates reversal")
+            reason = "crash expansion" if crash_mode else "trend"
+            if momentum_override:
+                reason = "momentum_override"
             logger.info(
                 "Entering momentum trade: %s, prob=%.3f, score=%.3f, crash_mode=%s reason=%s threshold=%.2f",
                 symbol,
                 prob,
                 momentum_score,
                 crash_mode,
-                "crash expansion" if crash_mode else "trend",
+                reason,
                 score_threshold,
             )
             signals.append(
@@ -249,7 +262,7 @@ def route_signals(universe: List[str], crash_mode: bool = False, context=None) -
                     "ml_threshold_reversal": ml_threshold_reversal,
                     "provider_intraday": intraday_provider,
                     "provider_daily": daily_provider,
-                    "reason": "crash expansion" if crash_mode else "trend",
+                    "reason": reason,
                 }
             )
             _log_signal(signals[-1])

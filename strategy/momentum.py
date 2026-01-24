@@ -45,7 +45,7 @@ def compute_momentum_scores(
         # 5-min bars: short-term velocity, slope, and volume expansion
         ret_short = (close.iloc[-1] / close.iloc[-3]) - 1 if len(close) >= 3 else 0.0
         ret_mid = (close.iloc[-1] / close.iloc[-12]) - 1 if len(close) >= 12 else 0.0
-        slope = close.diff().rolling(6).mean().iloc[-1] if len(close) >= 6 else 0.0
+        slope = close.pct_change().rolling(6).mean().iloc[-1] if len(close) >= 6 else 0.0
         recent_vol = volume.tail(6).mean()
         base_vol = volume.tail(18).mean()
         vol_ratio = (recent_vol / base_vol) if pd.notna(base_vol) and base_vol else 0.0

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from datetime import datetime, timezone
 
 from core.config import get_settings
@@ -17,6 +18,24 @@ MAX_POSITION_SIZE = float(os.getenv("MAX_POSITION_SIZE", DAILY_BUDGET / 3))
 price_router = PriceRouter()
 logger = logging.getLogger(__name__)
 settings = get_settings()
+_exit_error_counts: dict[str, tuple[int, float]] = {}
+_EXIT_ERROR_LIMIT = 2
+_EXIT_ERROR_RESET_SECONDS = 600
+
+
+def _should_force_exit_on_error(symbol: str | None) -> bool:
+    if not symbol:
+        return True
+    now = time.time()
+    count, last_ts = _exit_error_counts.get(symbol, (0, 0.0))
+    if now - last_ts > _EXIT_ERROR_RESET_SECONDS:
+        count = 0
+    count += 1
+    _exit_error_counts[symbol] = (count, now)
+    if count >= _EXIT_ERROR_LIMIT:
+        _exit_error_counts.pop(symbol, None)
+        return True
+    return False
 
 
 def stop_loss_price(entry_price: float, crash_mode: bool = False) -> float:
@@ -118,8 +137,8 @@ def should_exit(position: dict, crash_mode: bool = False) -> bool:
                 if passes_exit_filter(df):
                     return True
         except Exception as e:
-            logger.warning("Risk exit forced due to price error: %s", e)
-            return True  # FORCE EXIT when price unavailable
+            logger.warning("Risk exit data error for %s: %s", symbol, e)
+            return _should_force_exit_on_error(symbol)
     return False
 
 

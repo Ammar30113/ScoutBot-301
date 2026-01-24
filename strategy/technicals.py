@@ -53,7 +53,16 @@ def passes_exit_filter(ohlcv_df: pd.DataFrame) -> bool:
     macd_hist = _macd_hist(close).iloc[-1]
     price = close.iloc[-1]
     vwap = compute_vwap(ohlcv_df).iloc[-1]
-    return bool(rsi > EXIT_RSI_MIN or macd_hist < 0 or price < sma20 or price < vwap)
+    signals = 0
+    if rsi > EXIT_RSI_MIN:
+        signals += 1
+    if macd_hist < 0:
+        signals += 1
+    if price < sma20:
+        signals += 1
+    if price < vwap:
+        signals += 1
+    return signals >= 2
 
 
 def _macd_hist(close: pd.Series) -> pd.Series:
