@@ -111,7 +111,7 @@ class Settings:
         default_factory=lambda: _get_str("ALPACA_API_BASE_URL", "https://paper-api.alpaca.markets")
     )
     alpaca_data_url: str = field(default_factory=lambda: _get_str("ALPACA_API_DATA_URL", "https://data.alpaca.markets/v2"))
-    alpaca_data_feed: str = field(default_factory=lambda: _get_str("ALPACA_DATA_FEED", ""))
+    alpaca_data_feed: str = field(default_factory=lambda: _get_str("ALPACA_DATA_FEED", "iex"))
     trading_mode: str = field(default_factory=lambda: _get_str("MODE", "paper").lower())
     allow_live_trading: bool = field(default_factory=lambda: _get_bool("ALLOW_LIVE_TRADING", False))
     dry_run: bool = field(default_factory=lambda: _get_bool("DRY_RUN", False))
