@@ -222,6 +222,9 @@ class PriceRouter:
                 stale_candidate = (cached_age, "cache", cached_bars)
         for provider in self.providers:
             provider_name = provider.__class__.__name__
+            if self._provider_rate_limited(provider):
+                logger.info("%s rate-limited; skipping intraday for %s", provider_name, symbol)
+                continue
             try:
                 frame: pd.DataFrame
                 if isinstance(provider, AlphaVantageProvider):

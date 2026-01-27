@@ -36,6 +36,8 @@ class AlpacaProvider:
         self.base_url = settings.alpaca_data_url.rstrip("/")
         self.api_key = settings.alpaca_api_key
         self.api_secret = settings.alpaca_api_secret
+        feed = (settings.alpaca_data_feed or "").strip()
+        self.data_feed = feed if feed else None
         self._strip_on_rate_limit = settings.strip_rate_limited_keys
         if not self.api_key or not self.api_secret:
             logger.warning("AlpacaProvider missing credentials; calls will fail until configured")
@@ -71,8 +73,9 @@ class AlpacaProvider:
         if self._rate_limited():
             return None
         url = f"{self.base_url}/stocks/{symbol.upper()}/trades/latest"
+        params = {"feed": self.data_feed} if self.data_feed else None
         try:
-            response = requests.get(url, headers=self._headers(), timeout=10)
+            response = requests.get(url, headers=self._headers(), params=params, timeout=10)
             if response.status_code == 429:
                 self._set_rate_limit(RATE_LIMIT_COOLDOWN, "http 429")
                 return None
@@ -94,6 +97,8 @@ class AlpacaProvider:
         timeframe = self._normalize_timespan(timespan)
         url = f"{self.base_url}/stocks/{symbol.upper()}/bars"
         params = {"timeframe": timeframe, "limit": limit, "adjustment": "split"}
+        if self.data_feed:
+            params["feed"] = self.data_feed
         try:
             response = requests.get(url, headers=self._headers(), params=params, timeout=10)
             if response.status_code == 429:
