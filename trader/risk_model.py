@@ -38,6 +38,26 @@ def _should_force_exit_on_error(symbol: str | None) -> bool:
     return False
 
 
+def _coerce_pct(value: object, fallback: float) -> float:
+    try:
+        pct = float(value)
+    except (TypeError, ValueError):
+        return fallback
+    if pct <= 0 or pct >= 1:
+        return fallback
+    return pct
+
+
+def _coerce_minutes(value: object, fallback: int) -> int:
+    try:
+        minutes = int(float(value))
+    except (TypeError, ValueError):
+        return fallback
+    if minutes <= 0:
+        return fallback
+    return minutes
+
+
 def stop_loss_price(entry_price: float, crash_mode: bool = False) -> float:
     pct = 0.005 if crash_mode else STOP_LOSS_PCT
     return round(entry_price * (1 - pct), 2)
@@ -93,6 +113,7 @@ def should_exit(position: dict, crash_mode: bool = False) -> bool:
     price_raw = position.get("current_price", 0.0) if isinstance(position, dict) else getattr(position, "current_price", 0.0)
     entry_raw = position.get("entry_price", 0.0) if isinstance(position, dict) else getattr(position, "entry_price", 0.0)
     symbol = position.get("symbol") if isinstance(position, dict) else getattr(position, "symbol", None)
+    data_source = position.get("data_source") if isinstance(position, dict) else getattr(position, "data_source", None)
 
     price = float(price_raw)
     entry = float(entry_raw)
@@ -100,9 +121,14 @@ def should_exit(position: dict, crash_mode: bool = False) -> bool:
     if not price or not entry:
         return True
 
-    tp_pct = 0.015 if crash_mode else TAKE_PROFIT_PCT
-    sl_pct = 0.005 if crash_mode else STOP_LOSS_PCT
-    max_minutes = 60 if crash_mode else 90
+    default_tp = 0.015 if crash_mode else TAKE_PROFIT_PCT
+    default_sl = 0.005 if crash_mode else STOP_LOSS_PCT
+    tp_pct = _coerce_pct(position.get("take_profit_pct") if isinstance(position, dict) else None, default_tp)
+    sl_pct = _coerce_pct(position.get("stop_loss_pct") if isinstance(position, dict) else None, default_sl)
+    max_minutes = _coerce_minutes(
+        position.get("max_hold_minutes") if isinstance(position, dict) else None,
+        60 if crash_mode else 90,
+    )
 
     gain = (price / entry) - 1
     if gain >= tp_pct or gain <= -sl_pct:
@@ -124,6 +150,9 @@ def should_exit(position: dict, crash_mode: bool = False) -> bool:
     if elapsed_minutes >= max_minutes:
         logger.info("Time-stop exit triggered for %s after %.1f minutes", symbol, elapsed_minutes)
         return True
+
+    if data_source == "daily":
+        return False
 
     if symbol:
         try:

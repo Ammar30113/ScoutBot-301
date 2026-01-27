@@ -19,7 +19,7 @@ from trader import risk_model
 from data.price_router import PriceRouter
 from strategy.crash_detector import get_crash_state
 from trader.pnl_tracker import update_daily_pnl
-from data.portfolio_state import sync_entry_timestamps
+from data.portfolio_state import sync_entry_timestamps, sync_entry_metadata
 from types import SimpleNamespace
 
 logging.basicConfig(level=logging.INFO, format="%Y-%m-%d %H:%M:%S | %(levelname)s | %(name)s | %(message)s")
@@ -97,6 +97,8 @@ def microcap_cycle():
                     continue
                 crash = False
                 drop = 0.0
+            context.intraday_data_age = data_age
+            context.intraday_data_fresh = data_age is not None and data_age <= settings.intraday_stale_seconds
             logger.info("Crash mode = %s (SPY 5min drop = %.3f)", crash, drop)
             logger.info("=== Crash Mode %s ===", "ACTIVE" if crash else "OFF")
 
@@ -160,6 +162,7 @@ def microcap_cycle():
                 [pos.symbol for pos in open_positions],
                 default_timestamp=None,
             )
+            entry_meta_map = sync_entry_metadata([pos.symbol for pos in open_positions])
             for pos in open_positions:
                 symbol_key = pos.symbol.upper()
                 try:
@@ -167,11 +170,16 @@ def microcap_cycle():
                     entry_price = float(pos.avg_entry_price)
                 except Exception:
                     continue
+                metadata = entry_meta_map.get(symbol_key, {}) if isinstance(entry_meta_map, dict) else {}
                 position_payload = {
                     "symbol": pos.symbol,
                     "current_price": current_price,
                     "entry_price": entry_price,
                     "entry_timestamp": entry_ts_map.get(symbol_key),
+                    "stop_loss_pct": metadata.get("stop_loss_pct"),
+                    "take_profit_pct": metadata.get("take_profit_pct"),
+                    "max_hold_minutes": metadata.get("max_hold_minutes"),
+                    "data_source": metadata.get("data_source"),
                 }
                 if risk_model.should_exit(position_payload, crash_mode=crash):
                     entry_ts = entry_ts_map.get(symbol_key)

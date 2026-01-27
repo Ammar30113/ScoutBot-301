@@ -47,6 +47,14 @@ def allocate_positions(final_signals, crash_mode: bool = False):
         symbol = signal["symbol"] if isinstance(signal, dict) else signal
         signal_type = signal.get("type") if isinstance(signal, dict) else "momentum"
         vol_ratio = float(signal.get("vol_ratio", 1.0) if isinstance(signal, dict) else 1.0)
+        size_multiplier = 1.0
+        if isinstance(signal, dict):
+            try:
+                size_multiplier = float(signal.get("size_multiplier", 1.0))
+            except (TypeError, ValueError):
+                size_multiplier = 1.0
+        if not math.isfinite(size_multiplier) or size_multiplier <= 0:
+            size_multiplier = 1.0
 
         try:
             price = price_router.get_price(symbol)
@@ -74,6 +82,7 @@ def allocate_positions(final_signals, crash_mode: bool = False):
                 size = min(base_allocation, base_allocation * 1.3)
             if signal_type == "reversal":
                 size *= 0.6
+        size *= min(max(size_multiplier, 0.2), 1.5)
 
         size = min(size, budget_remaining)
         shares = math.floor(size / price) if price > 0 else 0

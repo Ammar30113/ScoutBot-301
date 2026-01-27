@@ -292,41 +292,67 @@ class PriceRouter:
         if cached_age is not None and cached_age > settings.daily_stale_seconds:
             cached_bars = []
         combined: List[Dict[str, float]] = []
+        skip_external = False
         if settings.skip_daily_on_rate_limit and daily_providers:
             if all(self._provider_rate_limited(provider) for provider in daily_providers):
-                return cached_bars or combined
-        for provider in self.providers:
-            provider_name = provider.__class__.__name__
-            if isinstance(provider, AlpacaProvider) and not allow_alpaca_daily:
-                # Skip Alpaca for daily bars to avoid rate limits unless explicitly enabled.
-                continue
-            try:
-                if hasattr(provider, "get_aggregates"):
-                    bars = provider.get_aggregates(symbol, timespan="1day", limit=limit)  # type: ignore[arg-type]
-                else:
+                skip_external = True
+                logger.warning("Daily providers rate-limited; attempting Alpaca daily fallback for %s", symbol)
+        if not skip_external:
+            for provider in self.providers:
+                provider_name = provider.__class__.__name__
+                if isinstance(provider, AlpacaProvider) and not allow_alpaca_daily:
+                    # Skip Alpaca for daily bars to avoid rate limits unless explicitly enabled.
                     continue
-                frame = self.aggregates_to_dataframe(bars)
-                if frame.empty:
-                    continue
-                age = self._bars_age_seconds(frame)
-                if age is not None and age > settings.daily_stale_seconds:
-                    logger.warning(
-                        "%s daily aggregates stale for %s (age %.1f days); trying next provider",
-                        provider_name,
-                        symbol,
-                        age / 86400.0,
-                    )
-                    last_error = RuntimeError("stale daily data")
-                    continue
-                records = frame.to_dict("records")
-                combined = self._merge_records(cached_bars, records, limit)
-                if combined:
-                    self._set_last_provider(symbol, "daily", provider_name)
-                    cache.set(cache_key, combined, settings.cache_ttl)
-                    return combined
-            except Exception as exc:  # pragma: no cover - network guard
-                logger.warning("%s daily aggregates failed for %s: %s", provider_name, symbol, exc)
-                last_error = exc
+                try:
+                    if hasattr(provider, "get_aggregates"):
+                        bars = provider.get_aggregates(symbol, timespan="1day", limit=limit)  # type: ignore[arg-type]
+                    else:
+                        continue
+                    frame = self.aggregates_to_dataframe(bars)
+                    if frame.empty:
+                        continue
+                    age = self._bars_age_seconds(frame)
+                    if age is not None and age > settings.daily_stale_seconds:
+                        logger.warning(
+                            "%s daily aggregates stale for %s (age %.1f days); trying next provider",
+                            provider_name,
+                            symbol,
+                            age / 86400.0,
+                        )
+                        last_error = RuntimeError("stale daily data")
+                        continue
+                    records = frame.to_dict("records")
+                    combined = self._merge_records(cached_bars, records, limit)
+                    if combined:
+                        self._set_last_provider(symbol, "daily", provider_name)
+                        cache.set(cache_key, combined, settings.cache_ttl)
+                        return combined
+                except Exception as exc:  # pragma: no cover - network guard
+                    logger.warning("%s daily aggregates failed for %s: %s", provider_name, symbol, exc)
+                    last_error = exc
+        if not allow_alpaca_daily:
+            alpaca_provider = next((provider for provider in self.providers if isinstance(provider, AlpacaProvider)), None)
+            if alpaca_provider is not None and not self._provider_rate_limited(alpaca_provider):
+                try:
+                    bars = alpaca_provider.get_aggregates(symbol, timespan="1day", limit=limit)
+                    frame = self.aggregates_to_dataframe(bars)
+                    if not frame.empty:
+                        age = self._bars_age_seconds(frame)
+                        if age is not None and age > settings.daily_stale_seconds:
+                            logger.warning(
+                                "Alpaca daily aggregates stale for %s (age %.1f days); skipping fallback",
+                                symbol,
+                                age / 86400.0,
+                            )
+                        else:
+                            records = frame.to_dict("records")
+                            combined = self._merge_records(cached_bars, records, limit)
+                            if combined:
+                                self._set_last_provider(symbol, "daily", "AlpacaProvider")
+                                cache.set(cache_key, combined, settings.cache_ttl)
+                                return combined
+                except Exception as exc:  # pragma: no cover - network guard
+                    logger.warning("Alpaca daily fallback failed for %s: %s", symbol, exc)
         if cached_bars:
             return cached_bars
         if combined:
@@ -352,19 +378,20 @@ class PriceRouter:
 
         allow_alpaca_daily = _allow_alpaca_daily()
         daily_providers = self._daily_providers(allow_alpaca_daily)
+        skip_batch = False
         if remaining and settings.skip_daily_on_rate_limit and daily_providers:
             if all(self._provider_rate_limited(provider) for provider in daily_providers):
                 logger.warning(
-                    "Daily providers rate-limited; skipping per-symbol daily fetch for %s symbols",
+                    "Daily providers rate-limited; skipping batch daily fetch for %s symbols",
                     len(remaining),
                 )
-                for sym in remaining:
-                    results.setdefault(sym, [])
-                return results
-        if remaining:
+                skip_batch = True
+        if remaining and not skip_batch:
             for provider in self.providers:
                 if hasattr(provider, "get_daily_bars_multi"):
                     provider_name = provider.__class__.__name__
+                    if self._provider_rate_limited(provider):
+                        continue
                     try:
                         batch = provider.get_daily_bars_multi(remaining, limit=limit)  # type: ignore[attr-defined]
                         for sym, bars in batch.items():

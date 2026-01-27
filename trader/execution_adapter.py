@@ -10,7 +10,12 @@ from alpaca.trading.enums import OrderClass, OrderSide, TimeInForce
 from alpaca.trading.requests import MarketOrderRequest, StopLossRequest, TakeProfitRequest
 
 from core.config import get_settings
-from data.portfolio_state import clear_entry_timestamp, set_entry_timestamp
+from data.portfolio_state import (
+    clear_entry_metadata,
+    clear_entry_timestamp,
+    set_entry_metadata,
+    set_entry_timestamp,
+)
 from data.price_router import PriceRouter
 from trader.order_executor import trading_client
 from trader.position_sizer import size_position
@@ -107,17 +112,25 @@ def _coerce_float(value) -> float | None:
     return parsed
 
 
-def _track_pending_entry(order_id: str | None, symbol: str, expected_price: float | None) -> None:
+def _track_pending_entry(
+    order_id: str | None,
+    symbol: str,
+    expected_price: float | None,
+    entry_metadata: dict[str, object] | None,
+) -> None:
     if not order_id:
         return
     if not _can_fetch_orders():
         logger.warning("Order lookup unavailable; using submit timestamp for %s", symbol)
         set_entry_timestamp(symbol, datetime.now(timezone.utc).timestamp())
+        if entry_metadata:
+            set_entry_metadata(symbol, entry_metadata)
         return
     _pending_entries[order_id] = {
         "symbol": symbol,
         "submitted_at": time.time(),
         "expected_price": expected_price,
+        "entry_metadata": entry_metadata or {},
     }
 
 
@@ -168,6 +181,9 @@ def reconcile_pending_entries() -> None:
             symbol = str(payload.get("symbol") or "").upper()
             if symbol:
                 set_entry_timestamp(symbol, filled_at)
+                entry_metadata = payload.get("entry_metadata")
+                if isinstance(entry_metadata, dict) and entry_metadata:
+                    set_entry_metadata(symbol, entry_metadata)
                 fill_price = _coerce_float(getattr(order, "filled_avg_price", None))
                 if fill_price is not None:
                     expected_price = _coerce_float(payload.get("expected_price"))
@@ -327,6 +343,18 @@ def execute_signal(signal: TradeSignal, *, crash_mode: bool = False) -> Executio
     if stop_loss <= 0 or take_profit <= 0 or stop_loss >= entry_price or take_profit <= entry_price:
         return _log_skip(symbol, action, "invalid_bracket")
 
+    entry_metadata: dict[str, object] = {}
+    calc_stop_pct = (entry_price - stop_loss) / entry_price if entry_price > 0 else None
+    calc_tp_pct = (take_profit - entry_price) / entry_price if entry_price > 0 else None
+    if calc_stop_pct is not None and calc_stop_pct > 0:
+        entry_metadata["stop_loss_pct"] = calc_stop_pct
+    if calc_tp_pct is not None and calc_tp_pct > 0:
+        entry_metadata["take_profit_pct"] = calc_tp_pct
+    if signal.get("max_hold_minutes") is not None:
+        entry_metadata["max_hold_minutes"] = signal.get("max_hold_minutes")
+    if signal.get("data_source"):
+        entry_metadata["data_source"] = signal.get("data_source")
+
     account = _safe_get_account()
     if account is None:
         return _log_skip(symbol, action, _halt_reason or "alpaca_api_error")
@@ -404,8 +432,10 @@ def execute_signal(signal: TradeSignal, *, crash_mode: bool = False) -> Executio
         filled_at = _coerce_timestamp(getattr(submitted, "filled_at", None))
         if filled_at is not None or status == "filled":
             set_entry_timestamp(symbol, filled_at or datetime.now(timezone.utc).timestamp())
+            if entry_metadata:
+                set_entry_metadata(symbol, entry_metadata)
         else:
-            _track_pending_entry(order_id, symbol, entry_price)
+            _track_pending_entry(order_id, symbol, entry_price, entry_metadata)
         log_trade(
             {
                 "symbol": symbol,
@@ -501,6 +531,7 @@ def close_position(symbol: str, *, reason: str | None = None) -> ExecutionResult
     try:
         trading_client.close_position(symbol)
         clear_entry_timestamp(symbol)
+        clear_entry_metadata(symbol)
         log_trade(
             {
                 "symbol": symbol,

@@ -12,6 +12,7 @@ from strategy.technicals import passes_entry_filter, compute_atr
 from strategy.ml_classifier import generate_predictions
 from strategy.reversal import compute_reversal_signal
 from strategy.sentiment_engine import get_symbol_sentiment
+from strategy.swing import generate_swing_signals
 from strategy.orb import find_orb_setups
 from trader.risk_model import STOP_LOSS_PCT, TAKE_PROFIT_PCT
 from trader.trade_logger import log_trade
@@ -19,6 +20,32 @@ from trader.trade_logger import log_trade
 logger = logging.getLogger(__name__)
 price_router = PriceRouter()
 settings = get_settings()
+
+
+def _intraday_health(context) -> tuple[bool, float | None]:
+    if context is None:
+        return True, None
+    fresh_flag = getattr(context, "intraday_data_fresh", None)
+    data_age = getattr(context, "intraday_data_age", None)
+    if isinstance(fresh_flag, bool):
+        return fresh_flag, data_age if isinstance(data_age, (int, float)) else None
+    if isinstance(data_age, (int, float)):
+        return data_age <= settings.intraday_stale_seconds, data_age
+    return True, None
+
+
+def _load_daily_bars(symbols: List[str]) -> Dict[str, List[Dict[str, float]]]:
+    if not symbols:
+        return {}
+    if hasattr(price_router, "get_daily_bars_batch"):
+        return price_router.get_daily_bars_batch(symbols, limit=90)
+    daily_map: Dict[str, List[Dict[str, float]]] = {}
+    for sym in symbols:
+        try:
+            daily_map[sym] = price_router.get_daily_aggregates(sym, limit=90)
+        except Exception:
+            continue
+    return daily_map
 
 
 def _log_signal(signal: Dict[str, float | str]) -> None:
@@ -52,6 +79,22 @@ def _log_signal(signal: Dict[str, float | str]) -> None:
 
 
 def route_signals(universe: List[str], crash_mode: bool = False, context=None) -> List[Dict[str, float | str]]:
+    intraday_ok, data_age = _intraday_health(context)
+    if not intraday_ok:
+        if data_age is not None:
+            logger.warning(
+                "Intraday data stale (age %.1f min); switching to swing fallback",
+                data_age / 60.0,
+            )
+        else:
+            logger.warning("Intraday data unavailable; switching to swing fallback")
+        daily_bars_map = _load_daily_bars(universe)
+        sentiment_lookup = get_symbol_sentiment if settings.use_sentiment else None
+        swing_signals = generate_swing_signals(universe, daily_bars_map, sentiment_lookup=sentiment_lookup)
+        for sig in swing_signals:
+            _log_signal(sig)
+        return swing_signals
+
     orb_signals = find_orb_setups(universe, crash_mode=crash_mode)
     skip_symbols = {sig["symbol"] for sig in orb_signals}
     orb_symbols = [sig.get("symbol") for sig in orb_signals if isinstance(sig, dict) and sig.get("symbol")]
@@ -60,7 +103,7 @@ def route_signals(universe: List[str], crash_mode: bool = False, context=None) -
     momentum_map = {sym: score for sym, score in momentum}
 
     ml_preds = generate_predictions(universe, crash_mode=crash_mode)
-    daily_bars_map = {}
+    daily_bars_map: Dict[str, List[Dict[str, float]]] = {}
     symbols_for_daily: List[str] = []
     if ml_preds:
         symbols_for_daily.extend(sym for sym, _, _ in ml_preds if sym)
@@ -338,4 +381,12 @@ def route_signals(universe: List[str], crash_mode: bool = False, context=None) -
             logger.info("Crash mode signal cap reached (3); skipping remaining symbols")
             break
     signals.sort(key=lambda item: float(item.get("score", 0.0)), reverse=True)
-    return signals
+    if signals:
+        return signals
+
+    daily_bars_map = daily_bars_map or _load_daily_bars(universe)
+    sentiment_lookup = get_symbol_sentiment if settings.use_sentiment else None
+    swing_signals = generate_swing_signals(universe, daily_bars_map, sentiment_lookup=sentiment_lookup)
+    for sig in swing_signals:
+        _log_signal(sig)
+    return swing_signals
