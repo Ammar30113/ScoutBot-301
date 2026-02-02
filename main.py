@@ -1,4 +1,5 @@
 import logging
+import math
 import time
 from datetime import datetime, time as dt_time, timezone
 
@@ -115,6 +116,7 @@ def microcap_cycle():
                 allocations = allocate_positions(signals, crash_mode=crash)
 
                 # Enforce max position caps before submitting
+                max_notional = risk_model.max_position_notional(equity_value, crash_mode=crash)
                 filtered_allocations = {}
                 open_positions = list_positions()
                 open_count = len(open_positions)
@@ -125,6 +127,28 @@ def microcap_cycle():
                         logger.warning("Skipping %s for risk check; price unavailable: %s", symbol, exc)
                         continue
                     notional = shares * price
+                    if max_notional > 0 and notional > max_notional:
+                        capped_shares = math.floor(max_notional / price)
+                        if capped_shares <= 0:
+                            logger.info(
+                                "Risk cap blocked %s (notional %.2f > max %.2f)",
+                                symbol,
+                                notional,
+                                max_notional,
+                            )
+                            continue
+                        if capped_shares < shares:
+                            logger.info(
+                                "Risk cap scaled %s from %s to %s shares (notional %.2f -> %.2f, max %.2f)",
+                                symbol,
+                                shares,
+                                capped_shares,
+                                notional,
+                                capped_shares * price,
+                                max_notional,
+                            )
+                            shares = capped_shares
+                            notional = shares * price
                     if risk_model.can_open_position(
                         open_count + len(filtered_allocations),
                         notional,
@@ -151,6 +175,8 @@ def microcap_cycle():
                             "score": metadata.get("score"),
                             "stop_loss_pct": metadata.get("stop_loss_pct"),
                             "take_profit_pct": metadata.get("take_profit_pct"),
+                            "max_hold_minutes": metadata.get("max_hold_minutes"),
+                            "data_source": metadata.get("data_source"),
                         }
                     )
                 execute_signals(trade_signals, crash_mode=crash)

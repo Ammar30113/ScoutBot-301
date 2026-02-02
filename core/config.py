@@ -178,7 +178,9 @@ class Settings:
     )
     initial_equity: float = field(default_factory=lambda: float(os.getenv("INITIAL_EQUITY", "100000")))
     max_daily_loss_pct: float = field(default_factory=lambda: float(os.getenv("MAX_DAILY_LOSS_PCT", "0.03")))
-    max_position_pct: float = field(default_factory=lambda: float(os.getenv("MAX_POSITION_PCT", "0.10")))
+    max_position_pct: float = field(
+        default_factory=lambda: float(_normalize_env_value(os.getenv("MAX_POSITION_PCT")) or 0.0)
+    )
     max_risk_pct: float = field(default_factory=lambda: float(os.getenv("MAX_RISK_PCT", "0.005")))
     atr_multiplier: float = field(default_factory=lambda: float(os.getenv("ATR_MULTIPLIER", "2.5")))
     min_confidence: float = field(default_factory=lambda: float(os.getenv("MIN_CONFIDENCE", "0.45")))
