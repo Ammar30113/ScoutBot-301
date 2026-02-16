@@ -189,6 +189,22 @@ class Settings:
     ml_reversal_threshold: float = field(default_factory=lambda: float(os.getenv("ML_REVERSAL_THRESHOLD", "0.26")))
     ml_heuristic_weight: float = field(default_factory=lambda: float(os.getenv("ML_HEURISTIC_WEIGHT", "0.8")))
 
+    # P&L penalty thresholds (previously hardcoded in main.py)
+    pnl_penalty_loss_threshold: float = field(default_factory=lambda: float(os.getenv("PNL_PENALTY_LOSS_THRESHOLD", "0.01")))
+    pnl_penalty_loss_value: float = field(default_factory=lambda: float(os.getenv("PNL_PENALTY_LOSS_VALUE", "0.05")))
+    pnl_penalty_gain_threshold: float = field(default_factory=lambda: float(os.getenv("PNL_PENALTY_GAIN_THRESHOLD", "0.02")))
+    pnl_penalty_gain_value: float = field(default_factory=lambda: float(os.getenv("PNL_PENALTY_GAIN_VALUE", "-0.03")))
+
+    # Crash mode overrides (previously hardcoded)
+    crash_stop_loss_pct: float = field(default_factory=lambda: float(os.getenv("CRASH_STOP_LOSS_PCT", "0.005")))
+    crash_take_profit_pct: float = field(default_factory=lambda: float(os.getenv("CRASH_TAKE_PROFIT_PCT", "0.015")))
+    crash_max_hold_minutes: int = field(default_factory=lambda: _get_int("CRASH_MAX_HOLD_MINUTES", 60))
+    crash_max_positions: int = field(default_factory=lambda: _get_int("CRASH_MAX_POSITIONS", 3))
+    default_max_hold_minutes: int = field(default_factory=lambda: _get_int("DEFAULT_MAX_HOLD_MINUTES", 90))
+
+    # Cache limits
+    cache_max_size: int = field(default_factory=lambda: _get_int("CACHE_MAX_SIZE", 5000))
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

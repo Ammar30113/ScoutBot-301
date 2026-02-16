@@ -9,10 +9,11 @@ from core.config import get_settings
 
 
 class TTLCache:
-    """Lightweight in-memory cache with per-item TTL support."""
+    """Lightweight in-memory cache with per-item TTL and max-size support."""
 
-    def __init__(self, default_ttl: int = 900) -> None:
+    def __init__(self, default_ttl: int = 900, max_size: int = 5000) -> None:
         self.default_ttl = max(default_ttl, 0)
+        self.max_size = max(max_size, 0)
         self._data: Dict[str, Tuple[Any, float]] = {}
         self._lock = threading.Lock()
 
@@ -39,6 +40,8 @@ class TTLCache:
         expires_at = time.time() + ttl_value
         with self._lock:
             self._data[key] = (value, expires_at)
+            if self.max_size > 0 and len(self._data) > self.max_size:
+                self._evict_oldest()
 
     def delete(self, key: str) -> None:
         with self._lock:
@@ -57,8 +60,21 @@ class TTLCache:
             for key in expired_keys:
                 self._data.pop(key, None)
 
+    def _evict_oldest(self) -> None:
+        """Evict the oldest entries when max_size is exceeded. Must be called with lock held."""
+        if self.max_size <= 0 or len(self._data) <= self.max_size:
+            return
+        sorted_keys = sorted(self._data, key=lambda k: self._data[k][1])
+        evict_count = len(self._data) - self.max_size
+        for key in sorted_keys[:evict_count]:
+            self._data.pop(key, None)
+
+    def __len__(self) -> int:
+        with self._lock:
+            return len(self._data)
+
 
 @lru_cache(maxsize=1)
 def get_cache() -> TTLCache:
     settings = get_settings()
-    return TTLCache(default_ttl=settings.cache_ttl)
+    return TTLCache(default_ttl=settings.cache_ttl, max_size=settings.cache_max_size)

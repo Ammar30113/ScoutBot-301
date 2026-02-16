@@ -64,13 +64,13 @@ class MLClassifier:
                     model = self._train_synthetic_model()
                     try:
                         joblib.dump(model, self.model_path)
-                    except Exception:
-                        pass
+                    except OSError as save_exc:
+                        logger.warning("Failed to save synthetic model to %s: %s", self.model_path, save_exc)
                     return model
                 try:
                     os.remove(self.model_path)
-                except Exception:
-                    pass
+                except OSError as rm_exc:
+                    logger.warning("Failed to remove stale model %s: %s", self.model_path, rm_exc)
         model = self._train_model()
         joblib.dump(model, self.model_path)
         return model

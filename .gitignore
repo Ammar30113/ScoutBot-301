@@ -9,11 +9,28 @@ env/
 
 # OS
 .DS_Store
+Thumbs.db
 
 # Python tooling
 .mypy_cache/
 .pytest_cache/
 .ruff_cache/
+htmlcov/
+.coverage
+*.egg-info/
+dist/
+build/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
 
 # Env files
 .env
+.env.*
+!.env.example
+
+# Logs
+*.log

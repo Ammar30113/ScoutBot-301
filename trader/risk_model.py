@@ -59,12 +59,12 @@ def _coerce_minutes(value: object, fallback: int) -> int:
 
 
 def stop_loss_price(entry_price: float, crash_mode: bool = False) -> float:
-    pct = 0.005 if crash_mode else STOP_LOSS_PCT
+    pct = settings.crash_stop_loss_pct if crash_mode else STOP_LOSS_PCT
     return round(entry_price * (1 - pct), 2)
 
 
 def take_profit_price(entry_price: float, crash_mode: bool = False) -> float:
-    pct = 0.015 if crash_mode else TAKE_PROFIT_PCT
+    pct = settings.crash_take_profit_pct if crash_mode else TAKE_PROFIT_PCT
     return round(entry_price * (1 + pct), 2)
 
 
@@ -78,7 +78,7 @@ def daily_loss_exceeded(equity_return_pct: float | None) -> bool:
 
 
 def _max_position_notional(equity: float | None, crash_mode: bool) -> float:
-    max_positions = 3 if crash_mode else MAX_POSITIONS
+    max_positions = settings.crash_max_positions if crash_mode else MAX_POSITIONS
     max_pos_size = (DAILY_BUDGET * 0.80 / max_positions) if crash_mode else MAX_POSITION_SIZE
     if equity is None or equity <= 0:
         return max_pos_size
@@ -103,7 +103,7 @@ def can_open_position(
 ) -> bool:
     if daily_loss_exceeded(equity_return_pct):
         return False
-    max_positions = 3 if crash_mode else MAX_POSITIONS
+    max_positions = settings.crash_max_positions if crash_mode else MAX_POSITIONS
     max_pos_size = _max_position_notional(equity, crash_mode)
     return current_positions < max_positions and allocation_amount <= max_pos_size
 
@@ -121,13 +121,13 @@ def should_exit(position: dict, crash_mode: bool = False) -> bool:
     if not price or not entry:
         return True
 
-    default_tp = 0.015 if crash_mode else TAKE_PROFIT_PCT
-    default_sl = 0.005 if crash_mode else STOP_LOSS_PCT
+    default_tp = settings.crash_take_profit_pct if crash_mode else TAKE_PROFIT_PCT
+    default_sl = settings.crash_stop_loss_pct if crash_mode else STOP_LOSS_PCT
     tp_pct = _coerce_pct(position.get("take_profit_pct") if isinstance(position, dict) else None, default_tp)
     sl_pct = _coerce_pct(position.get("stop_loss_pct") if isinstance(position, dict) else None, default_sl)
     max_minutes = _coerce_minutes(
         position.get("max_hold_minutes") if isinstance(position, dict) else None,
-        60 if crash_mode else 90,
+        settings.crash_max_hold_minutes if crash_mode else settings.default_max_hold_minutes,
     )
 
     gain = (price / entry) - 1
