@@ -1,7 +1,6 @@
 import json
 import logging
 from dataclasses import dataclass, asdict, field, fields
-from pathlib import Path
 from typing import Dict, Iterable, Optional
 
 from core.config import get_settings

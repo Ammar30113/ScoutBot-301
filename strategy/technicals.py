@@ -29,7 +29,6 @@ def passes_entry_filter(df: pd.DataFrame, crash_mode: bool = False) -> bool:
     close = df["close"].astype(float)
     rsi = RSIIndicator(close, window=14).rsi().iloc[-1]
     macd = MACD(close).macd().iloc[-1]
-    macd_signal = MACD(close).macd_signal().iloc[-1]
     vwap = compute_vwap(df).iloc[-1]
 
     # Momentum: less aggressive thresholds

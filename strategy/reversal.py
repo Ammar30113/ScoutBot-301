@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 from ta.momentum import RSIIndicator
 
-from strategy.technicals import compute_atr, compute_macd_hist, atr_bands
+from strategy.technicals import compute_macd_hist, atr_bands
 
 
 def compute_reversal_signal(df: pd.DataFrame) -> float:

@@ -1,8 +1,5 @@
 """Tests for trader.risk_model core functions."""
 
-from unittest.mock import patch
-from datetime import datetime, timezone
-
 from trader.risk_model import (
     stop_loss_price,
     take_profit_price,

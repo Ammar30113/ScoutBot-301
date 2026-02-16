@@ -91,7 +91,7 @@ def execute_trades(allocations, crash_mode: bool = False):
             stop_loss=StopLossRequest(stop_price=sl),
         )
         try:
-            submitted_order = trading_client.submit_order(order)
+            trading_client.submit_order(order)
             set_entry_timestamp(symbol, datetime.now(timezone.utc).timestamp())
         except Exception as exc:  # pragma: no cover - network guard
             logger.warning("Order failed for %s: %s", symbol, exc)
