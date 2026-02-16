@@ -293,7 +293,7 @@ def execute_signal(signal: TradeSignal, *, crash_mode: bool = False) -> Executio
     open_positions = _safe_list_positions()
     if open_positions is None:
         return _log_skip(symbol, action, _halt_reason or "alpaca_api_error")
-    max_positions = 3 if crash_mode else MAX_POSITIONS
+    max_positions = settings.crash_max_positions if crash_mode else MAX_POSITIONS
     if len(open_positions) >= max_positions:
         return _log_skip(symbol, action, "max_positions_reached")
     if symbol in open_positions:
@@ -361,12 +361,14 @@ def execute_signal(signal: TradeSignal, *, crash_mode: bool = False) -> Executio
 
     try:
         equity = float(account.equity)
-    except Exception:
+    except (TypeError, ValueError) as exc:
+        logger.warning("Failed to parse account equity: %s", exc)
         equity = None
 
     try:
         buying_power = float(account.buying_power)
-    except Exception:
+    except (TypeError, ValueError) as exc:
+        logger.warning("Failed to parse buying power: %s", exc)
         buying_power = None
 
     max_notional = max_position_notional(equity, crash_mode=crash_mode)
@@ -498,7 +500,8 @@ def close_position(symbol: str, *, reason: str | None = None) -> ExecutionResult
     try:
         qty = float(pos.qty)
         held = float(getattr(pos, "held_for_orders", 0) or 0)
-    except Exception:
+    except (TypeError, ValueError) as exc:
+        logger.warning("Failed to parse position qty for %s: %s", symbol, exc)
         return _log_skip(symbol, "CLOSE", "position_parse_error")
 
     if qty <= 0 or held >= qty:
@@ -508,17 +511,20 @@ def close_position(symbol: str, *, reason: str | None = None) -> ExecutionResult
     current_price = None
     try:
         entry_price = float(pos.avg_entry_price)
-    except Exception:
+    except (TypeError, ValueError) as exc:
+        logger.warning("Failed to parse entry price for %s: %s", symbol, exc)
         entry_price = None
     try:
         current_price = float(pos.current_price)
-    except Exception:
+    except (TypeError, ValueError) as exc:
+        logger.warning("Failed to parse current price for %s: %s", symbol, exc)
         current_price = None
 
     if current_price is None:
         try:
             current_price = float(price_router.get_price(symbol))
-        except Exception:
+        except Exception as exc:
+            logger.warning("Price lookup failed for %s during close: %s", symbol, exc)
             current_price = None
 
     pnl = None

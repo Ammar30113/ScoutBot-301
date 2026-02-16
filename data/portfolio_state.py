@@ -1,9 +1,12 @@
 import json
+import logging
 from dataclasses import dataclass, asdict, field, fields
 from pathlib import Path
 from typing import Dict, Iterable, Optional
 
 from core.config import get_settings
+
+logger = logging.getLogger(__name__)
 
 STATE_PATH = get_settings().portfolio_state_path
 
@@ -40,7 +43,8 @@ def load_state() -> PortfolioState:
         if not isinstance(state.entry_timestamps, dict):
             state.entry_timestamps = {}
         return state
-    except Exception:
+    except Exception as exc:
+        logger.warning("Failed to load portfolio state from %s: %s", STATE_PATH, exc)
         return PortfolioState()
 
 

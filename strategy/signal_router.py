@@ -43,7 +43,8 @@ def _load_daily_bars(symbols: List[str]) -> Dict[str, List[Dict[str, float]]]:
     for sym in symbols:
         try:
             daily_map[sym] = price_router.get_daily_aggregates(sym, limit=90)
-        except Exception:
+        except Exception as exc:
+            logger.warning("Daily bars unavailable for %s: %s", sym, exc)
             continue
     return daily_map
 
@@ -119,7 +120,8 @@ def route_signals(universe: List[str], crash_mode: bool = False, context=None) -
                     break
                 try:
                     daily_bars_map[sym] = price_router.get_daily_aggregates(sym, limit=60)
-                except Exception:
+                except Exception as exc:
+                    logger.warning("Daily bars unavailable for %s: %s", sym, exc)
                     continue
     daily_regime_map = {}
     for sym, bars in (daily_bars_map or {}).items():
@@ -209,8 +211,8 @@ def route_signals(universe: List[str], crash_mode: bool = False, context=None) -
 
         entry_price = float(close.iloc[-1]) if len(close) else 0.0
         atr_pct_intraday = (atr_current / entry_price) if entry_price > 0 and atr_current > 0 else 0.0
-        base_sl_pct = 0.005 if crash_mode else STOP_LOSS_PCT
-        base_tp_pct = 0.015 if crash_mode else TAKE_PROFIT_PCT
+        base_sl_pct = settings.crash_stop_loss_pct if crash_mode else STOP_LOSS_PCT
+        base_tp_pct = settings.crash_take_profit_pct if crash_mode else TAKE_PROFIT_PCT
         max_sl_pct = 0.05 if crash_mode else 0.08
         max_tp_pct = 0.12 if crash_mode else 0.20
         if atr_pct_intraday > 0:

@@ -66,10 +66,10 @@ def microcap_cycle():
             if pnl_state:
                 equity_return_pct = pnl_state.equity_return_pct
                 equity_value = pnl_state.equity
-                if pnl_state.equity_return_pct < -0.01:
-                    pnl_penalty = 0.05
-                elif pnl_state.equity_return_pct > 0.02:
-                    pnl_penalty = -0.03
+                if pnl_state.equity_return_pct < -settings.pnl_penalty_loss_threshold:
+                    pnl_penalty = settings.pnl_penalty_loss_value
+                elif pnl_state.equity_return_pct > settings.pnl_penalty_gain_threshold:
+                    pnl_penalty = settings.pnl_penalty_gain_value
                 if risk_model.daily_loss_exceeded(pnl_state.equity_return_pct):
                     trade_allowed = False
                     logger.warning(
@@ -80,7 +80,7 @@ def microcap_cycle():
 
             # Pass penalty into signal router
             context.pnl_penalty = pnl_penalty
-            logger.info(f"P&L penalty for this cycle: {pnl_penalty}")
+            logger.info("P&L penalty for this cycle: %s", pnl_penalty)
             crash, drop, data_age = get_crash_state()
             if data_age is None:
                 logger.warning("Intraday data check failed; crash gate disabled for this cycle")
@@ -194,7 +194,8 @@ def microcap_cycle():
                 try:
                     current_price = float(pos.current_price)
                     entry_price = float(pos.avg_entry_price)
-                except Exception:
+                except (TypeError, ValueError) as exc:
+                    logger.warning("Skipping %s exit check; price parse error: %s", pos.symbol, exc)
                     continue
                 metadata = entry_meta_map.get(symbol_key, {}) if isinstance(entry_meta_map, dict) else {}
                 position_payload = {
@@ -213,10 +214,10 @@ def microcap_cycle():
                     if not current_price or not entry_price:
                         exit_reason = "invalid_price"
                     else:
-                        gain = (current_price / entry_price) - 1
-                        tp_pct = 0.015 if crash else risk_model.TAKE_PROFIT_PCT
-                        sl_pct = 0.005 if crash else risk_model.STOP_LOSS_PCT
-                        max_minutes = 60 if crash else 90
+                        gain = (current_price / entry_price) - 1 if entry_price > 0 else 0.0
+                        tp_pct = settings.crash_take_profit_pct if crash else risk_model.TAKE_PROFIT_PCT
+                        sl_pct = settings.crash_stop_loss_pct if crash else risk_model.STOP_LOSS_PCT
+                        max_minutes = settings.crash_max_hold_minutes if crash else settings.default_max_hold_minutes
                         if gain >= tp_pct:
                             exit_reason = "take_profit"
                         elif gain <= -sl_pct:
