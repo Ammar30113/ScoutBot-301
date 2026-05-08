@@ -5,7 +5,7 @@ This repository contains a from-scratch rewrite of the Microcap Scout Bot. The s
 ## Highlights
 - **Market data router** prioritizes Alpaca -> TwelveData -> AlphaVantage for prices/intraday; daily bars use TwelveData/AlphaVantage/Marketstack with caching + rate-limit backoff.
 - **Universe engine** loads CSV candidates (Russell3000 + fallback), filters by liquidity, ATR%, price, and market cap, with optional partial fundamentals/ATR.
-- **ML classifier** (XGBoost) saved at `models/momentum_sentiment_model.pkl` predicts next-bar upside from 5-minute features (RSI, MACD, VWAP diff, slope, volume ratio, ATR, ATR-band position).
+- **ML classifier** (XGBoost) predicts next-bar upside from 5-minute features (RSI, MACD, VWAP diff, slope, volume ratio, ATR, ATR-band position) when a real trained model is available.
 - **Strategies**: 5-minute ORB (morning only), momentum breakout, reversal; router blends ML prob, momentum rank, sentiment, and P&L penalty.
 - **Trader engine**: DAILY_BUDGET allocations, caps via `MAX_POSITIONS`/`MAX_POSITION_SIZE`, Alpaca bracket orders, time-stop + technical exits, crash mode triggered on SPY 5-min drop >= 1%.
 
@@ -17,7 +17,7 @@ ScoutBot-301/
 |-- universe/            # universe building via liquidity/vol/market-cap filters + CSV fallback
 |-- strategy/            # ML classifier + trading strategies + signal router
 |-- trader/              # allocation, risk, order execution, and portfolio state
-|-- models/              # auto-trained XGBoost model (momentum_sentiment_model.pkl)
+|-- models/              # local/offline model artifacts; .pkl files are not committed by default
 |-- main.py              # orchestrates the full pipeline + scheduler
 `-- requirements.txt
 ```
@@ -47,7 +47,7 @@ Set the following variables inside Railway (or a local `.env` file - the project
 | `USE_TWITTER_NEWS` | Toggle Twitter headlines in sentiment (default `false`) |
 | `TWITTER_BEARER_TOKEN` | Required if `USE_TWITTER_NEWS=true` |
 | `ALLOW_SYNTHETIC_ML` | Allow ML signals when the model is trained on synthetic data (default `false`) |
-| `ALLOW_FALLBACK_ML` | Allow heuristic ML scoring when synthetic ML is blocked (default `true`) |
+| `ALLOW_FALLBACK_ML` | Allow heuristic ML scoring when synthetic ML is blocked (default `false`) |
 | `TWITTER_ALLOWED_ACCOUNTS` | Comma-separated handles to scan (defaults in `core/config.py`) |
 | `TWITTER_MAX_POSTS_PER_DAY` | Daily tweet budget (default `3`) |
 | `TWITTER_TWEETS_PER_ACCOUNT` | Max tweets per account per day (default `1`) |
@@ -78,19 +78,25 @@ Set the following variables inside Railway (or a local `.env` file - the project
 
 ## Running Locally
 ```bash
-python -m venv .venv
+python3.11 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+pip install pytest ruff
+pytest
+ruff check .
+python -m scripts.preflight
 python main.py
 ```
 
 ## Railway Deployment
 1. Attach this repo to Railway and select the Python/Docker buildpack.
 2. Paste the required environment variables in the Railway dashboard (Bulk Edit recommended).
-3. Railway executes `python main.py` which boots the scheduler, builds the universe, generates ML signals, and routes orders through Alpaca.
+3. Run it as a worker process, not a public web service. The `Procfile` uses `worker: python main.py`.
+4. Keep the Railway worker offline until tests pass locally/CI and `python -m scripts.preflight` passes inside the target environment.
 
 ## Notes
-- The ML model auto-trains on first run from recent intraday data and is cached at `models/momentum_sentiment_model.pkl`. If no market data is available, it falls back to a synthetic model; consider retraining offline for production.
+- The ML model auto-trains only when `TRAIN_ML_ON_STARTUP=true` and recent intraday data is available. Synthetic fallback models are never persisted, and synthetic/heuristic ML signals are blocked by default.
+- Do not enable live trading until paper trading has produced enough logged fills, exits, slippage, drawdown, and backtest evidence to justify it.
 
 ## Sentiment (GPT-only)
 - `OPENAI_API_KEY`: OpenAI project key with permission to call chat models.

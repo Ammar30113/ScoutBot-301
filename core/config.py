@@ -65,22 +65,34 @@ def _get_optional_bool(name: str) -> bool | None:
 
 
 def _get_int(name: str, default: int) -> int:
+    raw = _normalize_env_value(os.getenv(name))
+    if not raw:
+        return default
+    normalized = raw.replace("_", "")
     try:
-        raw = _normalize_env_value(os.getenv(name))
-        if raw is None:
-            return default
-        return int(raw)
+        return int(normalized)
     except ValueError:
-        raw = _normalize_env_value(os.getenv(name))
-        if not raw:
-            return default
-        match = re.search(r"-?\d+", raw)
+        match = re.search(r"-?\d+", normalized)
         if not match:
+            logger.warning("Invalid integer for %s=%r; using default %s", name, raw, default)
             return default
         try:
             return int(match.group(0))
         except ValueError:
+            logger.warning("Invalid integer for %s=%r; using default %s", name, raw, default)
             return default
+
+
+def _get_float(name: str, default: float) -> float:
+    raw = _normalize_env_value(os.getenv(name))
+    if not raw:
+        return float(default)
+    normalized = raw.replace("_", "")
+    try:
+        return float(normalized)
+    except ValueError:
+        logger.warning("Invalid float for %s=%r; using default %s", name, raw, default)
+        return float(default)
 
 
 def _get_csv(name: str, default: list[str]) -> list[str]:
@@ -138,7 +150,7 @@ class Settings:
     use_twitter_news: bool = field(default_factory=lambda: USE_TWITTER_NEWS)
     twitter_bearer_token: str = field(default_factory=lambda: _get_str("TWITTER_BEARER_TOKEN", ""))
     allow_synthetic_ml: bool = field(default_factory=lambda: _get_bool("ALLOW_SYNTHETIC_ML", False))
-    allow_fallback_ml: bool = field(default_factory=lambda: _get_bool("ALLOW_FALLBACK_ML", True))
+    allow_fallback_ml: bool = field(default_factory=lambda: _get_bool("ALLOW_FALLBACK_ML", False))
     train_ml_on_startup: bool = field(default_factory=lambda: _get_bool("TRAIN_ML_ON_STARTUP", False))
     twitter_allowed_accounts: list[str] = field(
         default_factory=lambda: _get_csv("TWITTER_ALLOWED_ACCOUNTS", DEFAULT_TWITTER_ALLOWED_ACCOUNTS)
@@ -153,11 +165,11 @@ class Settings:
     universe_allow_unfiltered_fallback: bool = field(
         default_factory=lambda: _get_bool("UNIVERSE_ALLOW_UNFILTERED_FALLBACK", True)
     )
-    min_dollar_volume: float = field(default_factory=lambda: float(os.getenv("MIN_DOLLAR_VOLUME", 8_000_000)))
-    min_mkt_cap: float = field(default_factory=lambda: float(os.getenv("MIN_MKT_CAP", 300_000_000)))
-    max_mkt_cap: float = field(default_factory=lambda: float(os.getenv("MAX_MKT_CAP", 5_000_000_000)))
-    min_price: float = field(default_factory=lambda: float(os.getenv("MIN_PRICE", 2.0)))
-    max_price: float = field(default_factory=lambda: float(os.getenv("MAX_PRICE", 80.0)))
+    min_dollar_volume: float = field(default_factory=lambda: _get_float("MIN_DOLLAR_VOLUME", 8_000_000.0))
+    min_mkt_cap: float = field(default_factory=lambda: _get_float("MIN_MKT_CAP", 300_000_000.0))
+    max_mkt_cap: float = field(default_factory=lambda: _get_float("MAX_MKT_CAP", 5_000_000_000.0))
+    min_price: float = field(default_factory=lambda: _get_float("MIN_PRICE", 2.0))
+    max_price: float = field(default_factory=lambda: _get_float("MAX_PRICE", 80.0))
     max_universe_size: int = field(default_factory=lambda: _get_int("MAX_UNIVERSE_SIZE", 50))
     universe_candidate_limit: int = field(default_factory=lambda: _get_int("UNIVERSE_CANDIDATE_LIMIT", 0))
     universe_liquidity_top_n: int = field(default_factory=lambda: _get_int("UNIVERSE_LIQUIDITY_TOP_N", 300))
@@ -169,41 +181,47 @@ class Settings:
         default_factory=lambda: _get_str("ALLOW_PARTIAL_FUNDAMENTALS", "true").lower() != "false"
     )
     allow_partial_atr: bool = field(default_factory=lambda: _get_str("ALLOW_PARTIAL_ATR", "true").lower() != "false")
-    regime_gate_min_score: float = field(default_factory=lambda: float(os.getenv("REGIME_GATE_MIN_SCORE", "0.0")))
+    regime_gate_min_score: float = field(default_factory=lambda: _get_float("REGIME_GATE_MIN_SCORE", 0.0))
 
     scheduler_interval_seconds: int = field(default_factory=lambda: _get_int("SCHEDULER_INTERVAL_SECONDS", 900))
-    max_positions: int = field(default_factory=lambda: _get_int("MAX_POSITIONS", 10))
+    daily_budget_usd: float = field(default_factory=lambda: _get_float("DAILY_BUDGET_USD", 10_000.0))
+    max_positions: int = field(default_factory=lambda: _get_int("MAX_POSITIONS", 5))
+    max_position_size: float = field(default_factory=lambda: _get_float("MAX_POSITION_SIZE", 0.0))
     portfolio_state_path: Path = field(
         default_factory=lambda: Path(_get_str("PORTFOLIO_STATE_PATH", "data/portfolio_state.json"))
     )
-    initial_equity: float = field(default_factory=lambda: float(os.getenv("INITIAL_EQUITY", "100000")))
-    max_daily_loss_pct: float = field(default_factory=lambda: float(os.getenv("MAX_DAILY_LOSS_PCT", "0.03")))
-    max_position_pct: float = field(
-        default_factory=lambda: float(_normalize_env_value(os.getenv("MAX_POSITION_PCT")) or 0.0)
-    )
-    max_risk_pct: float = field(default_factory=lambda: float(os.getenv("MAX_RISK_PCT", "0.005")))
-    atr_multiplier: float = field(default_factory=lambda: float(os.getenv("ATR_MULTIPLIER", "2.5")))
-    min_confidence: float = field(default_factory=lambda: float(os.getenv("MIN_CONFIDENCE", "0.45")))
-    default_timespan: str = field(default_factory=lambda: os.getenv("DEFAULT_TIMESPAN", "1day"))
-    ml_trend_threshold: float = field(default_factory=lambda: float(os.getenv("ML_TREND_THRESHOLD", "0.20")))
-    ml_reversal_threshold: float = field(default_factory=lambda: float(os.getenv("ML_REVERSAL_THRESHOLD", "0.26")))
-    ml_heuristic_weight: float = field(default_factory=lambda: float(os.getenv("ML_HEURISTIC_WEIGHT", "0.8")))
+    initial_equity: float = field(default_factory=lambda: _get_float("INITIAL_EQUITY", 100_000.0))
+    max_daily_loss_pct: float = field(default_factory=lambda: _get_float("MAX_DAILY_LOSS_PCT", 0.03))
+    max_position_pct: float = field(default_factory=lambda: _get_float("MAX_POSITION_PCT", 0.0))
+    max_risk_pct: float = field(default_factory=lambda: _get_float("MAX_RISK_PCT", 0.005))
+    atr_multiplier: float = field(default_factory=lambda: _get_float("ATR_MULTIPLIER", 2.5))
+    min_confidence: float = field(default_factory=lambda: _get_float("MIN_CONFIDENCE", 0.45))
+    default_timespan: str = field(default_factory=lambda: _get_str("DEFAULT_TIMESPAN", "1day"))
+    ml_trend_threshold: float = field(default_factory=lambda: _get_float("ML_TREND_THRESHOLD", 0.20))
+    ml_reversal_threshold: float = field(default_factory=lambda: _get_float("ML_REVERSAL_THRESHOLD", 0.26))
+    ml_heuristic_weight: float = field(default_factory=lambda: _get_float("ML_HEURISTIC_WEIGHT", 0.8))
 
     # P&L penalty thresholds (previously hardcoded in main.py)
-    pnl_penalty_loss_threshold: float = field(default_factory=lambda: float(os.getenv("PNL_PENALTY_LOSS_THRESHOLD", "0.01")))
-    pnl_penalty_loss_value: float = field(default_factory=lambda: float(os.getenv("PNL_PENALTY_LOSS_VALUE", "0.05")))
-    pnl_penalty_gain_threshold: float = field(default_factory=lambda: float(os.getenv("PNL_PENALTY_GAIN_THRESHOLD", "0.02")))
-    pnl_penalty_gain_value: float = field(default_factory=lambda: float(os.getenv("PNL_PENALTY_GAIN_VALUE", "-0.03")))
+    pnl_penalty_loss_threshold: float = field(default_factory=lambda: _get_float("PNL_PENALTY_LOSS_THRESHOLD", 0.01))
+    pnl_penalty_loss_value: float = field(default_factory=lambda: _get_float("PNL_PENALTY_LOSS_VALUE", 0.05))
+    pnl_penalty_gain_threshold: float = field(default_factory=lambda: _get_float("PNL_PENALTY_GAIN_THRESHOLD", 0.02))
+    pnl_penalty_gain_value: float = field(default_factory=lambda: _get_float("PNL_PENALTY_GAIN_VALUE", -0.03))
 
     # Crash mode overrides (previously hardcoded)
-    crash_stop_loss_pct: float = field(default_factory=lambda: float(os.getenv("CRASH_STOP_LOSS_PCT", "0.005")))
-    crash_take_profit_pct: float = field(default_factory=lambda: float(os.getenv("CRASH_TAKE_PROFIT_PCT", "0.015")))
+    crash_stop_loss_pct: float = field(default_factory=lambda: _get_float("CRASH_STOP_LOSS_PCT", 0.005))
+    crash_take_profit_pct: float = field(default_factory=lambda: _get_float("CRASH_TAKE_PROFIT_PCT", 0.015))
     crash_max_hold_minutes: int = field(default_factory=lambda: _get_int("CRASH_MAX_HOLD_MINUTES", 60))
     crash_max_positions: int = field(default_factory=lambda: _get_int("CRASH_MAX_POSITIONS", 3))
     default_max_hold_minutes: int = field(default_factory=lambda: _get_int("DEFAULT_MAX_HOLD_MINUTES", 90))
 
     # Cache limits
     cache_max_size: int = field(default_factory=lambda: _get_int("CACHE_MAX_SIZE", 5000))
+
+    def __post_init__(self) -> None:
+        if self.max_position_size <= 0:
+            self.max_position_size = self.daily_budget_usd / 3 if self.daily_budget_usd > 0 else 0.0
+        self.max_positions = max(int(self.max_positions), 1)
+        self.crash_max_positions = max(int(self.crash_max_positions), 1)
 
 
 @lru_cache(maxsize=1)

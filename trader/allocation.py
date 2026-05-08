@@ -1,12 +1,13 @@
 import logging
 import math
-import os
 
+from core.config import get_settings
 from data.price_router import PriceRouter
 
 logger = logging.getLogger(__name__)
+settings = get_settings()
 price_router = PriceRouter()
-DAILY_BUDGET = float(os.getenv("DAILY_BUDGET_USD", 10000))
+DAILY_BUDGET = settings.daily_budget_usd
 
 
 def _signal_strength(signal) -> float:

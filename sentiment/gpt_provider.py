@@ -14,7 +14,21 @@ FALLBACK_MODELS = [
     "gpt-5",
 ]
 
-client = OpenAI()
+_client: OpenAI | None = None
+_missing_key_warned = False
+
+
+def _get_client() -> OpenAI | None:
+    global _client, _missing_key_warned
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        if not _missing_key_warned:
+            log.warning("sentiment.gpt_provider | OPENAI_API_KEY missing; returning neutral sentiment.")
+            _missing_key_warned = True
+        return None
+    if _client is None:
+        _client = OpenAI(api_key=api_key)
+    return _client
 
 
 def get_gpt_sentiment(symbol: str, news: list[str] | None = None) -> float:
@@ -23,6 +37,10 @@ def get_gpt_sentiment(symbol: str, news: list[str] | None = None) -> float:
     Uses PRIMARY_MODEL then allowed fallbacks; handles permission errors
     and other failures gracefully, returning 0.0 if everything fails.
     """
+    client = _get_client()
+    if client is None:
+        return 0.0
+
     models_to_try = [PRIMARY_MODEL] + FALLBACK_MODELS
 
     news_block = ""

@@ -21,6 +21,13 @@ htmlcov/
 .env.*
 !.env.example
 
+# Runtime state / locally trained artifacts
+data/portfolio_state.json
+data/trade_log.jsonl
+data/twitter_quota.json
+data/twitter_user_ids.json
+models/*.pkl
+
 # IDE
 .idea/
 .vscode/

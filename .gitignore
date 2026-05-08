@@ -34,3 +34,12 @@ build/
 
 # Logs
 *.log
+
+# Runtime state
+data/portfolio_state.json
+data/trade_log.jsonl
+data/twitter_quota.json
+data/twitter_user_ids.json
+
+# Runtime-trained model artifacts
+models/*.pkl

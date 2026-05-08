@@ -1,7 +1,6 @@
 """Tests for trader.risk_model core functions."""
 
-from unittest.mock import patch
-from datetime import datetime, timezone
+import pandas as pd
 
 from trader.risk_model import (
     stop_loss_price,
@@ -10,6 +9,7 @@ from trader.risk_model import (
     can_open_position,
     _coerce_pct,
     _coerce_minutes,
+    _trailing_stop_from_bars,
 )
 
 
@@ -112,3 +112,28 @@ class TestCoerceMinutes:
 
     def test_float_truncated(self):
         assert _coerce_minutes(45.9, 90) == 45
+
+
+class TestTrailingStop:
+    def test_handles_pandas_timestamps(self):
+        timestamps = pd.date_range("2026-01-02 14:30:00", periods=20, freq="5min", tz="UTC")
+        frame = pd.DataFrame(
+            {
+                "timestamp": timestamps,
+                "open": [100.0 + i * 0.3 for i in range(20)],
+                "high": [101.0 + i * 0.5 for i in range(20)],
+                "low": [99.0 + i * 0.2 for i in range(20)],
+                "close": [100.5 + i * 0.4 for i in range(20)],
+                "volume": [1000.0 for _ in range(20)],
+            }
+        )
+
+        trailing_stop = _trailing_stop_from_bars(
+            frame,
+            entry_price=100.0,
+            entry_timestamp=timestamps[0].timestamp(),
+            crash_mode=False,
+        )
+
+        assert trailing_stop is not None
+        assert trailing_stop > 100.0

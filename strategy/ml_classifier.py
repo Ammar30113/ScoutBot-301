@@ -10,7 +10,14 @@ import numpy as np
 import pandas as pd
 from ta.momentum import RSIIndicator
 from ta.trend import MACD
-from xgboost import XGBClassifier
+
+try:
+    from xgboost import XGBClassifier
+except Exception as exc:  # pragma: no cover - depends on local native runtime
+    XGBClassifier = None
+    XGBOOST_IMPORT_ERROR = exc
+else:
+    XGBOOST_IMPORT_ERROR = None
 
 from core.logger import get_logger
 from core.config import get_settings
@@ -38,6 +45,14 @@ LOG_SAMPLE_LIMIT = 5
 _warn_counts: dict[str, int] = defaultdict(int)
 
 
+class _UnavailableModel:
+    synthetic = True
+    unavailable = True
+
+    def predict_proba(self, _vector):
+        raise RuntimeError("XGBoost is unavailable")
+
+
 class MLClassifier:
     def __init__(self, model_path: Path = MODEL_PATH) -> None:
         self.model_path = model_path
@@ -47,6 +62,10 @@ class MLClassifier:
     def _load_or_train_model(self) -> XGBClassifier:
         self.model_path.parent.mkdir(parents=True, exist_ok=True)
         self.synthetic = False
+        if XGBClassifier is None:
+            self.synthetic = True
+            logger.warning("XGBoost unavailable; ML predictions will require heuristic fallback: %s", XGBOOST_IMPORT_ERROR)
+            return _UnavailableModel()
         if self.model_path.exists():
             try:
                 model = joblib.load(self.model_path)
@@ -61,22 +80,22 @@ class MLClassifier:
                 logger.warning("Existing ML model %s invalid; retraining (%s)", self.model_path, exc)
                 if not settings.train_ml_on_startup:
                     logger.warning("ML retraining disabled; falling back to synthetic model.")
-                    model = self._train_synthetic_model()
-                    try:
-                        joblib.dump(model, self.model_path)
-                    except OSError as save_exc:
-                        logger.warning("Failed to save synthetic model to %s: %s", self.model_path, save_exc)
-                    return model
+                    return self._train_synthetic_model()
                 try:
                     os.remove(self.model_path)
                 except OSError as rm_exc:
                     logger.warning("Failed to remove stale model %s: %s", self.model_path, rm_exc)
         model = self._train_model()
-        joblib.dump(model, self.model_path)
+        if bool(getattr(model, "synthetic", False)):
+            logger.warning("Synthetic ML model was created for this process only; not persisting to %s", self.model_path)
+        else:
+            joblib.dump(model, self.model_path)
         return model
 
     def _train_synthetic_model(self) -> XGBClassifier:
         self.synthetic = True
+        if XGBClassifier is None:
+            return _UnavailableModel()
         rng = np.random.default_rng(42)
         samples = 200
         X = rng.normal(size=(samples, len(FEATURE_COLUMNS)))
@@ -275,9 +294,12 @@ def generate_predictions(universe: Iterable[str], crash_mode: bool = False) -> L
             return predictions
         use_heuristic = True
         if not _synthetic_warned:
-            logger.warning(
-                "Synthetic ML model in use; heuristic fallback enabled. Set ALLOW_FALLBACK_ML=false to disable."
-            )
+            if getattr(classifier.model, "unavailable", False):
+                logger.warning("XGBoost unavailable; heuristic fallback enabled because ALLOW_FALLBACK_ML=true.")
+            else:
+                logger.warning(
+                    "Synthetic ML model in use; heuristic fallback enabled. Set ALLOW_FALLBACK_ML=false to disable."
+                )
             _synthetic_warned = True
     for symbol in universe:
         try:

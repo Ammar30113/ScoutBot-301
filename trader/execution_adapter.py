@@ -17,7 +17,7 @@ from data.portfolio_state import (
     set_entry_timestamp,
 )
 from data.price_router import PriceRouter
-from trader.order_executor import trading_client
+from trader.alpaca_client import trading_client
 from trader.position_sizer import size_position
 from trader.risk_model import MAX_POSITIONS, max_position_notional, stop_loss_price, take_profit_price
 from trader.trade_logger import log_trade

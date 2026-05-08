@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import os
 import time
 from datetime import datetime, timezone
 
@@ -11,13 +10,12 @@ from strategy.technicals import passes_exit_filter, compute_atr
 
 STOP_LOSS_PCT = 0.006
 TAKE_PROFIT_PCT = 0.018
-DAILY_BUDGET = float(os.getenv("DAILY_BUDGET_USD", 10000))
-MAX_POSITIONS = int(os.getenv("MAX_POSITIONS", "5"))
-# Allow explicit override; otherwise default to one-third of daily budget
-MAX_POSITION_SIZE = float(os.getenv("MAX_POSITION_SIZE", DAILY_BUDGET / 3))
-price_router = PriceRouter()
 logger = logging.getLogger(__name__)
 settings = get_settings()
+DAILY_BUDGET = settings.daily_budget_usd
+MAX_POSITIONS = settings.max_positions
+MAX_POSITION_SIZE = settings.max_position_size
+price_router = PriceRouter()
 _exit_error_counts: dict[str, tuple[int, float]] = {}
 _EXIT_ERROR_LIMIT = 2
 _EXIT_ERROR_RESET_SECONDS = 600
@@ -180,7 +178,9 @@ def _trailing_stop_from_bars(
     if frame is None or frame.empty:
         return None
     if entry_timestamp is not None:
-        frame = frame[frame["timestamp"] >= entry_timestamp]
+        frame = frame.copy()
+        frame["_timestamp_seconds"] = frame["timestamp"].map(PriceRouter._normalize_timestamp)
+        frame = frame[frame["_timestamp_seconds"] >= float(entry_timestamp)]
     if frame.empty:
         return None
     high_water = float(frame["high"].astype(float).max())
