@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import re
 import logging
 from dataclasses import dataclass, field
 from functools import lru_cache
@@ -72,15 +71,8 @@ def _get_int(name: str, default: int) -> int:
     try:
         return int(normalized)
     except ValueError:
-        match = re.search(r"-?\d+", normalized)
-        if not match:
-            logger.warning("Invalid integer for %s=%r; using default %s", name, raw, default)
-            return default
-        try:
-            return int(match.group(0))
-        except ValueError:
-            logger.warning("Invalid integer for %s=%r; using default %s", name, raw, default)
-            return default
+        logger.warning("Invalid integer for %s=%r; using default %s", name, raw, default)
+        return default
 
 
 def _get_float(name: str, default: float) -> float:
