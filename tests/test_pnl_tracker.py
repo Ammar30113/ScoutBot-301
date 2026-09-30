@@ -25,7 +25,7 @@ class TestUpdateDailyPnl:
         mock_load.return_value = PortfolioState()
         client = MagicMock()
         client.get_account.side_effect = Exception("API error")
-        result = update_daily_pnl(client)
+        result = update_daily_pnl(client, realized_pnl=500)
         assert result is None
 
     @patch("trader.pnl_tracker.save_state")
@@ -47,7 +47,7 @@ class TestUpdateDailyPnl:
 
             mock_dt.now.return_value = datetime(2026, 2, 16, 12, 0, tzinfo=timezone.utc)
             mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
-            result = update_daily_pnl(client)
+            result = update_daily_pnl(client, realized_pnl=500)
 
         assert result is not None
         assert result.equity == 101_000.0
@@ -71,7 +71,7 @@ class TestUpdateDailyPnl:
 
             mock_dt.now.return_value = datetime(2026, 2, 16, 12, 0, tzinfo=timezone.utc)
             mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
-            result = update_daily_pnl(client)
+            result = update_daily_pnl(client, realized_pnl=500)
 
         # Should not crash; baseline should be set to equity
         assert result is not None

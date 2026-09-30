@@ -15,8 +15,8 @@ def _max_drawdown(equity_curve: List[Dict[str, float]]) -> float:
     max_dd = 0.0
     for point in equity_curve:
         equity = float(point.get("equity", 0.0))
-        if equity <= 0:
-            continue
+        if equity < 0:
+            equity = 0.0
         if peak is None or equity > peak:
             peak = equity
         if peak:
@@ -52,7 +52,7 @@ def _annualization_factor(equity_curve: List[Dict[str, float]]) -> float:
     step_seconds = median(deltas)
     if step_seconds <= 0:
         return 1.0
-    periods_per_year = (252.0 * TRADING_DAY_SECONDS) / step_seconds
+    periods_per_year = 252.0 if step_seconds >= 20 * 3600 else (252.0 * TRADING_DAY_SECONDS) / step_seconds
     return math.sqrt(max(periods_per_year, 1.0))
 
 
@@ -67,7 +67,7 @@ def summarize_backtest(result: BacktestResult) -> Dict[str, float]:
     avg_loss = (sum(t.pnl for t in losses) / len(losses)) if losses else 0.0
     gross_profit = sum(t.pnl for t in wins)
     gross_loss = sum(t.pnl for t in losses)
-    profit_factor = (gross_profit / abs(gross_loss)) if gross_loss < 0 else (math.inf if gross_profit > 0 else 0.0)
+    profit_factor = (gross_profit / abs(gross_loss)) if gross_loss < 0 else (None if gross_profit > 0 else 0.0)
 
     durations = [(t.exit_timestamp - t.entry_timestamp) / 60.0 for t in trades if t.exit_timestamp >= t.entry_timestamp]
     avg_hold_minutes = (sum(durations) / len(durations)) if durations else 0.0
@@ -88,7 +88,7 @@ def summarize_backtest(result: BacktestResult) -> Dict[str, float]:
         "win_rate": float(win_rate),
         "avg_win": float(avg_win),
         "avg_loss": float(avg_loss),
-        "profit_factor": float(profit_factor),
+        "profit_factor": profit_factor,
         "max_drawdown_pct": float(max_drawdown),
         "sharpe": float(sharpe),
         "avg_hold_minutes": float(avg_hold_minutes),

@@ -14,25 +14,27 @@ def _normalize_frame(frame: pd.DataFrame) -> pd.DataFrame:
     if "timestamp" not in frame.columns:
         for col in _TIME_COLUMNS:
             if col in frame.columns:
-                dt = pd.to_datetime(frame[col], utc=True, errors="coerce")
+                dt = pd.to_datetime(frame[col], utc=True, errors="raise")
                 frame = frame.copy()
-                frame["timestamp"] = (dt.view("int64") // 10**9).astype(float)
+                frame["timestamp"] = (dt.astype("int64") // 10**9).astype(float)
                 break
     if "timestamp" not in frame.columns:
         raise ValueError("CSV must include timestamp or datetime/date/time column")
 
     frame = frame.copy()
-    frame["timestamp"] = pd.to_numeric(frame["timestamp"], errors="coerce")
+    frame["timestamp"] = pd.to_numeric(frame["timestamp"], errors="raise")
     if frame["timestamp"].max(skipna=True) > 1_000_000_000_000:
         frame["timestamp"] = frame["timestamp"] / 1000.0
 
     for col in REQUIRED_COLUMNS[1:]:
         if col not in frame.columns:
             raise ValueError(f"CSV missing required column '{col}'")
-        frame[col] = pd.to_numeric(frame[col], errors="coerce")
+        frame[col] = pd.to_numeric(frame[col], errors="raise")
 
-    frame = frame.dropna(subset=REQUIRED_COLUMNS)
-    frame = frame[frame["timestamp"] > 0]
+    if frame[list(REQUIRED_COLUMNS)].isna().any().any() or (frame["timestamp"] <= 0).any():
+        raise ValueError("CSV contains missing values or invalid timestamps")
+    if frame["timestamp"].duplicated().any():
+        raise ValueError("CSV contains duplicate timestamps")
     frame = frame.sort_values("timestamp").reset_index(drop=True)
     return frame[list(REQUIRED_COLUMNS)]
 

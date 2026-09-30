@@ -31,7 +31,7 @@ def _warn_sample(reason: str, message: str, *, level: int = logging.WARNING) -> 
 class MarketstackProvider:
     """EOD-only Marketstack wrapper for daily bars (free plan compatible)."""
 
-    BASE_URL = "http://api.marketstack.com/v1"
+    BASE_URL = "https://api.marketstack.com/v2"
     _rate_limit_until = 0.0
     _disabled = False
 
@@ -161,6 +161,7 @@ class MarketstackProvider:
             "close": close,
             "volume": float(volume) if volume is not None else 0.0,
             "timestamp": timestamp,
+            "split_factor": float(row.get("split_factor") or 1),
         }
 
     def get_price(self, symbol: str) -> Optional[float]:
@@ -169,7 +170,7 @@ class MarketstackProvider:
     def get_aggregates(self, symbol: str, timespan: str = "1day", limit: int = 60) -> List[Dict[str, float]]:
         if timespan.lower() not in ("1day", "day", "1d"):
             return []
-        cache_key = f"ms:1day:{symbol.upper()}"
+        cache_key = f"ms:1day:{symbol.upper()}:{limit}"
         cached = self.cache.get(cache_key) or []
         if cached is _NO_DATA:
             return []

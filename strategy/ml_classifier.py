@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import Dict, Iterable, List, Tuple
 from collections import defaultdict
@@ -68,23 +67,17 @@ class MLClassifier:
             return _UnavailableModel()
         if self.model_path.exists():
             try:
-                model = joblib.load(self.model_path)
+                model = joblib.load(self.model_path)  # Trusted local research artifacts only.
                 if hasattr(model, "n_features_in_") and int(model.n_features_in_) != len(FEATURE_COLUMNS):
-                    raise ValueError("Stale model feature shape; retraining")
-                # sanity check predict_proba shape
+                    raise ValueError("Model feature shape does not match")
                 _ = model.predict_proba(np.zeros((1, len(FEATURE_COLUMNS))))
                 self.synthetic = bool(getattr(model, "synthetic", False))
-                logger.info("Loaded existing ML model successfully.")
                 return model
-            except Exception as exc:  # pragma: no cover - defensive log
-                logger.warning("Existing ML model %s invalid; retraining (%s)", self.model_path, exc)
-                if not settings.train_ml_on_startup:
-                    logger.warning("ML retraining disabled; falling back to synthetic model.")
-                    return self._train_synthetic_model()
-                try:
-                    os.remove(self.model_path)
-                except OSError as rm_exc:
-                    logger.warning("Failed to remove stale model %s: %s", self.model_path, rm_exc)
+            except Exception:
+                logger.warning("Invalid research model; preserving the artifact and disabling predictions")
+        if not settings.train_ml_on_startup:
+            self.synthetic = True
+            return _UnavailableModel()
         model = self._train_model()
         if bool(getattr(model, "synthetic", False)):
             logger.warning("Synthetic ML model was created for this process only; not persisting to %s", self.model_path)
@@ -94,7 +87,7 @@ class MLClassifier:
 
     def _train_synthetic_model(self) -> XGBClassifier:
         self.synthetic = True
-        if XGBClassifier is None:
+        if not settings.allow_synthetic_ml or XGBClassifier is None:
             return _UnavailableModel()
         rng = np.random.default_rng(42)
         samples = 200
@@ -162,7 +155,7 @@ class MLClassifier:
                 df["atr_band_position"] = 0.0
 
             df.replace([np.inf, -np.inf], np.nan, inplace=True)
-            df = df.dropna(subset=FEATURE_COLUMNS + ["target"])
+            df = df.dropna(subset=FEATURE_COLUMNS + ["target", "ret1"])
             if not df.empty:
                 frames.append(df)
 
@@ -189,19 +182,15 @@ class MLClassifier:
 
     def predict(self, features: Dict[str, float], crash_mode: bool = False) -> float:
         vector = np.array([[features.get(col, 0.0) for col in FEATURE_COLUMNS]])
-        if crash_mode:
-            # weight ATR-band and MACD-hist higher during crash
-            macd_idx = FEATURE_COLUMNS.index("macd_hist")
-            atr_band_idx = FEATURE_COLUMNS.index("atr_band_position")
-            vector[0, macd_idx] *= 1.3
-            vector[0, atr_band_idx] *= 1.3
+        if not np.isfinite(vector).all():
+            raise ValueError("Non-finite ML features")
         proba = self.model.predict_proba(vector)[0][1]
         return float(np.clip(proba, 0.0, 1.0))
 
 
 def build_features(price_frame: pd.DataFrame) -> Dict[str, float]:
-    if price_frame.empty or len(price_frame) < 20:
-        return {col: 0.0 for col in FEATURE_COLUMNS}
+    if price_frame.empty or len(price_frame) < 35:
+        raise ValueError("ML features require at least 35 completed bars")
 
     df = price_frame.copy()
     close = df["close"].astype(float)
@@ -303,7 +292,7 @@ def generate_predictions(universe: Iterable[str], crash_mode: bool = False) -> L
             _synthetic_warned = True
     for symbol in universe:
         try:
-            bars = price_router.get_aggregates(symbol, window=120)
+            bars = price_router.get_aggregates(symbol, window=200)
         except Exception as exc:  # pragma: no cover - network guard
             _warn_counts[symbol] += 1
             count = _warn_counts[symbol]
@@ -313,13 +302,13 @@ def generate_predictions(universe: Iterable[str], crash_mode: bool = False) -> L
                 logger.info("Aggregates unavailable for %s (suppressing repeats; %s occurrences)", symbol, count)
             continue
         price_frame = PriceRouter.aggregates_to_dataframe(bars)
-        if price_frame.empty:
+        if price_frame.empty or len(price_frame) < 35:
             logger.warning("No price data for %s", symbol)
             continue
 
         features = build_features(price_frame)
-        if crash_mode:
-            features = {k: (0.0 if v is None or not np.isfinite(v) else v) for k, v in features.items()}
+        if not all(np.isfinite(v) for v in features.values()):
+            continue
         if use_heuristic:
             prob = _heuristic_prob(features)
             logger.info("Heuristic ML probability for %s -> %.3f", symbol, prob)
@@ -327,11 +316,8 @@ def generate_predictions(universe: Iterable[str], crash_mode: bool = False) -> L
             prob_raw = classifier.predict(features, crash_mode=crash_mode)
             if blend_weight > 0:
                 heuristic = _heuristic_prob(features)
-                blended = heuristic * blend_weight
-                if blended > prob_raw:
-                    prob = blended
-                else:
-                    prob = prob_raw
+                weight = float(np.clip(blend_weight, 0, 1))
+                prob = heuristic * weight + prob_raw * (1 - weight)
                 prob = float(np.clip(prob, 0.0, 1.0))
                 logger.info(
                     "ML probability for %s -> %.3f (raw=%.3f heuristic=%.3f)",

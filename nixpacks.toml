@@ -1,12 +1,11 @@
 providers = ["python"]
 
 [variables]
-PYTHON_VERSION = "3.11"
+PYTHON_VERSION = "3.12"
 
 [phases.install]
 cmds = [
-  "python -m pip install --upgrade pip",
-  "python -m pip install --no-cache-dir -r requirements.txt"
+  "python -m pip install --no-cache-dir -r requirements-paper.lock"
 ]
 
 [start]

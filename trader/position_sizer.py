@@ -35,10 +35,9 @@ def size_position(
         return 0
 
     max_by_risk = math.floor(risk_cap / risk)
-    if entry_price <= 0 or max_notional <= 0:
-        max_by_notional = max_by_risk
-    else:
-        max_by_notional = math.floor(max_notional / float(entry_price))
+    if not math.isfinite(entry_price) or not math.isfinite(max_notional) or entry_price <= 0 or max_notional <= 0:
+        return 0
+    max_by_notional = math.floor(max_notional / float(entry_price))
     qty = min(max_by_risk, max_by_notional)
     if qty < min_qty:
         return 0

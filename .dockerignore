@@ -42,3 +42,10 @@ Thumbs.db
 *.md
 LICENSE
 .github/
+
+# Isolated paper accounts and local results
+*.sqlite3*
+*.status.json
+*.lock
+!requirements*.lock
+artifacts/

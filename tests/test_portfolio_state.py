@@ -1,6 +1,7 @@
 """Tests for data.portfolio_state."""
 
 import json
+import pytest
 import tempfile
 from pathlib import Path
 from unittest.mock import patch
@@ -48,28 +49,26 @@ class TestLoadSaveState:
         finally:
             path.unlink(missing_ok=True)
 
-    def test_load_corrupted_json_returns_default(self):
+    def test_load_corrupted_json_fails_closed(self):
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             f.write("{invalid json")
             path = Path(f.name)
 
         try:
             with patch("data.portfolio_state.STATE_PATH", path):
-                state = load_state()
-                assert isinstance(state, PortfolioState)
-                assert state.equity == 0.0
+                with pytest.raises(ValueError, match="refusing to reset"):
+                    load_state()
         finally:
             path.unlink(missing_ok=True)
 
-    def test_load_non_dict_json_returns_default(self):
+    def test_load_non_dict_json_fails_closed(self):
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             json.dump([1, 2, 3], f)
             path = Path(f.name)
 
         try:
             with patch("data.portfolio_state.STATE_PATH", path):
-                state = load_state()
-                assert isinstance(state, PortfolioState)
-                assert state.equity == 0.0
+                with pytest.raises(ValueError, match="refusing to reset"):
+                    load_state()
         finally:
             path.unlink(missing_ok=True)
