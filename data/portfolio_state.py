@@ -4,6 +4,7 @@ from dataclasses import dataclass, asdict, field, fields
 from typing import Dict, Iterable, Optional
 
 from core.config import get_settings
+from core.io import atomic_json
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +36,7 @@ def load_state() -> PortfolioState:
         with open(STATE_PATH, "r") as f:
             data = json.load(f)
         if not isinstance(data, dict):
-            return PortfolioState()
+            raise ValueError("Portfolio state must be an object")
         allowed = {item.name for item in fields(PortfolioState)}
         filtered = {key: value for key, value in data.items() if key in allowed}
         state = PortfolioState(**filtered)
@@ -44,13 +45,11 @@ def load_state() -> PortfolioState:
         return state
     except Exception as exc:
         logger.warning("Failed to load portfolio state from %s: %s", STATE_PATH, exc)
-        return PortfolioState()
+        raise ValueError("Unreadable portfolio state; refusing to reset") from exc
 
 
 def save_state(state: PortfolioState):
-    STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with open(STATE_PATH, "w") as f:
-        json.dump(state.to_dict(), f, indent=2)
+    atomic_json(STATE_PATH, state.to_dict())
 
 
 def get_entry_timestamp(symbol: str) -> Optional[float]:

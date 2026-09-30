@@ -37,3 +37,14 @@ def test_invalid_model_does_not_persist_synthetic_replacement(tmp_path, monkeypa
 
     assert classifier.synthetic is True
     assert model_path.read_bytes() == b""
+
+
+def test_missing_model_does_not_train_when_disabled(tmp_path, monkeypatch):
+    def forbidden(*args):
+        raise AssertionError("Training must not run")
+    monkeypatch.setattr(ml_classifier.settings, "train_ml_on_startup", False)
+    monkeypatch.setattr(ml_classifier.MLClassifier, "_train_model", forbidden)
+    monkeypatch.setattr(ml_classifier.MLClassifier, "_train_synthetic_model", forbidden)
+    classifier = ml_classifier.MLClassifier(tmp_path / "missing.pkl")
+    assert classifier.model.unavailable
+    assert not (tmp_path / "missing.pkl").exists()

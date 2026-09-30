@@ -102,3 +102,8 @@ class TestSizePosition:
             max_notional=500.0,  # can only afford 5 shares
         )
         assert qty == 5
+
+
+def test_invalid_notional_never_removes_cap():
+    for cap in (0, -1, math.nan, math.inf):
+        assert size_position(10, 9, equity=1000, max_risk_pct=.01, max_notional=cap) == 0

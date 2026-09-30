@@ -8,6 +8,8 @@ from typing import Dict, List, Sequence
 import pandas as pd
 
 from core.config import get_settings
+from core.market_calendar import calendar, latest_completed_session
+from data.bars import completed_bars
 from core.logger import get_logger
 from data.alpaca_provider import AlpacaProvider
 from data.alphavantage_provider import AlphaVantageProvider
@@ -19,29 +21,6 @@ logger = get_logger(__name__)
 settings = get_settings()
 cache = get_cache()
 _providers_cache: Sequence[object] | None = None
-_alpaca_daily_fallback_warned = False
-
-
-def _has_external_daily_provider() -> bool:
-    return bool(settings.twelvedata_api_key or settings.alphavantage_api_key or settings.marketstack_api_key)
-
-
-def _allow_alpaca_daily() -> bool:
-    if settings.allow_alpaca_daily is True:
-        return True
-    if settings.allow_alpaca_daily is False:
-        return False
-    if _has_external_daily_provider():
-        return False
-    global _alpaca_daily_fallback_warned
-    if not _alpaca_daily_fallback_warned:
-        logger.warning(
-            "No external daily providers configured; enabling Alpaca daily fallback. Set ALLOW_ALPACA_DAILY=false to disable."
-        )
-        _alpaca_daily_fallback_warned = True
-    return True
-
-
 def resample_to_5m(bars) -> pd.DataFrame:
     """Normalize raw bars to 5-minute OHLCV buckets."""
 
@@ -62,6 +41,8 @@ def resample_to_5m(bars) -> pd.DataFrame:
         }
     )
     frame = frame.dropna().reset_index()
+    frame = frame[frame["timestamp"] + pd.Timedelta(minutes=5) <= pd.Timestamp.now(tz="UTC")]
+    frame["timestamp"] = frame["timestamp"].astype("int64") / 1e9
     return frame
 
 
@@ -157,30 +138,6 @@ class PriceRouter:
         checker = getattr(provider, "is_rate_limited", None)
         return bool(checker()) if callable(checker) else False
 
-    def _daily_providers(self, allow_alpaca_daily: bool) -> list[object]:
-        providers: list[object] = []
-        for provider in self.providers:
-            if isinstance(provider, AlpacaProvider) and not allow_alpaca_daily:
-                continue
-            if hasattr(provider, "get_aggregates"):
-                providers.append(provider)
-        return providers
-
-    @staticmethod
-    def _merge_records(cached: List[Dict[str, float]], fresh: List[Dict[str, float]], limit: int) -> List[Dict[str, float]]:
-        """Merge cached + fresh bars by timestamp."""
-
-        combined = {float(item["timestamp"]): item for item in cached or [] if "timestamp" in item}
-        for item in fresh or []:
-            ts = float(item.get("timestamp", 0))
-            if ts:
-                combined[ts] = item
-        merged = list(combined.values())
-        merged.sort(key=lambda x: x["timestamp"])
-        if limit and len(merged) > limit:
-            merged = merged[-limit:]
-        return merged
-
     def get_price(self, symbol: str) -> float:
         last_error: Exception | None = None
         for provider in self.providers:
@@ -275,148 +232,50 @@ class PriceRouter:
             return records
         raise RuntimeError(f"All providers failed to return aggregates for {symbol}") from last_error
 
-    def get_daily_aggregates(self, symbol: str, limit: int = 60) -> List[Dict[str, float]]:
-        """
-        Return up to ``limit`` daily bars.
-        Provider priority: TwelveData → AlphaVantage → Marketstack → Alpaca.
-        Alpaca daily is used only when ALLOW_ALPACA_DAILY=true or no external daily providers are configured.
-        """
+    def _paper_provider(self):
+        names = {"twelvedata": TwelveDataProvider, "marketstack": MarketstackProvider,
+                 "alpaca": AlpacaProvider, "alphavantage": AlphaVantageProvider}
+        selected = settings.paper_data_provider
+        if selected == "auto":
+            selected = next((name for name, cls in names.items()
+                             if any(isinstance(p, cls) for p in self.providers)
+                             and (name != "alpaca" or settings.allow_alpaca_daily is True)), "")
+        provider = next((p for p in self.providers if isinstance(p, names.get(selected, type(None)))), None)
+        if provider is None or (selected == "alpaca" and settings.allow_alpaca_daily is not True):
+            raise RuntimeError("Selected daily provider is unavailable")
+        return selected, provider
 
-        last_error: Exception | None = None
-        limit = max(limit, 5)
-        allow_alpaca_daily = _allow_alpaca_daily()
-        daily_providers = self._daily_providers(allow_alpaca_daily)
-        cache_key = f"daily_bars:{symbol.upper()}"
-        cached_bars = cache.get(cache_key) or []
-        cached_age = self._bars_age_seconds(cached_bars)
-        if cached_age is not None and cached_age > settings.daily_stale_seconds:
-            cached_bars = []
-        combined: List[Dict[str, float]] = []
-        skip_external = False
-        if settings.skip_daily_on_rate_limit and daily_providers:
-            if all(self._provider_rate_limited(provider) for provider in daily_providers):
-                skip_external = True
-                logger.warning("Daily providers rate-limited; attempting Alpaca daily fallback for %s", symbol)
-        if not skip_external:
-            for provider in self.providers:
-                provider_name = provider.__class__.__name__
-                if isinstance(provider, AlpacaProvider) and not allow_alpaca_daily:
-                    # Skip Alpaca for daily bars to avoid rate limits unless explicitly enabled.
-                    continue
-                try:
-                    if hasattr(provider, "get_aggregates"):
-                        bars = provider.get_aggregates(symbol, timespan="1day", limit=limit)  # type: ignore[arg-type]
-                    else:
-                        continue
-                    frame = self.aggregates_to_dataframe(bars)
-                    if frame.empty:
-                        continue
-                    age = self._bars_age_seconds(frame)
-                    if age is not None and age > settings.daily_stale_seconds:
-                        logger.warning(
-                            "%s daily aggregates stale for %s (age %.1f days); trying next provider",
-                            provider_name,
-                            symbol,
-                            age / 86400.0,
-                        )
-                        last_error = RuntimeError("stale daily data")
-                        continue
-                    records = frame.to_dict("records")
-                    combined = self._merge_records(cached_bars, records, limit)
-                    if combined:
-                        self._set_last_provider(symbol, "daily", provider_name)
-                        cache.set(cache_key, combined, settings.cache_ttl)
-                        return combined
-                except Exception as exc:  # pragma: no cover - network guard
-                    logger.warning("%s daily aggregates failed for %s: %s", provider_name, symbol, exc)
-                    last_error = exc
-        if not allow_alpaca_daily:
-            alpaca_provider = next((provider for provider in self.providers if isinstance(provider, AlpacaProvider)), None)
-            if alpaca_provider is not None and not self._provider_rate_limited(alpaca_provider):
-                try:
-                    bars = alpaca_provider.get_aggregates(symbol, timespan="1day", limit=limit)
-                    frame = self.aggregates_to_dataframe(bars)
-                    if not frame.empty:
-                        age = self._bars_age_seconds(frame)
-                        if age is not None and age > settings.daily_stale_seconds:
-                            logger.warning(
-                                "Alpaca daily aggregates stale for %s (age %.1f days); skipping fallback",
-                                symbol,
-                                age / 86400.0,
-                            )
-                        else:
-                            records = frame.to_dict("records")
-                            combined = self._merge_records(cached_bars, records, limit)
-                            if combined:
-                                self._set_last_provider(symbol, "daily", "AlpacaProvider")
-                                cache.set(cache_key, combined, settings.cache_ttl)
-                                return combined
-                except Exception as exc:  # pragma: no cover - network guard
-                    logger.warning("Alpaca daily fallback failed for %s: %s", symbol, exc)
-        if cached_bars:
-            return cached_bars
-        if combined:
-            return combined
-        if last_error:
-            logger.warning("Daily aggregates unavailable for %s; returning empty set: %s", symbol, last_error)
-        return []
+    @property
+    def daily_provider_name(self) -> str:
+        return self._paper_provider()[0]
+
+    def get_daily_aggregates(self, symbol: str, limit: int = 60) -> List[Dict[str, float]]:
+        """Use one pinned provider; never merge prices from different adjustment schemes.
+
+        The engine validates exchange-session freshness, including holidays, after retrieval.
+        Provider failures therefore cannot silently switch the trading strategy's data source.
+        """
+        name, provider = self._paper_provider()
+        key = f"paper_daily:{name}:{symbol.upper()}:{limit}"
+        cached = cache.get(key)
+        if cached is not None:
+            return cached
+        bars = provider.get_aggregates(symbol, timespan="1day", limit=limit)
+        if not bars:
+            raise RuntimeError("Selected daily provider returned no bars")
+        self._set_last_provider(symbol, "daily", name)
+        now = time.time()
+        expected = latest_completed_session(now - settings.data_delay_seconds)
+        completed = completed_bars(bars, now - settings.data_delay_seconds)
+        ttl = settings.cache_ttl
+        if completed and completed[-1].available_at >= calendar().session_close(expected).timestamp():
+            next_close = calendar().session_close(calendar().next_session(expected)).timestamp()
+            ttl = max(ttl, int(next_close + settings.data_delay_seconds - now))
+        cache.set(key, bars, ttl)
+        return bars
 
     def get_daily_bars_batch(self, symbols: Sequence[str], limit: int = 60) -> Dict[str, List[Dict[str, float]]]:
-        """Batch-fetch daily bars; use provider multi endpoints when available."""
-
-        limit = max(limit, 5)
-        results: Dict[str, List[Dict[str, float]]] = {}
-        remaining = []
-        for sym in symbols:
-            cache_key = f"daily_bars:{sym.upper()}"
-            cached = cache.get(cache_key)
-            cached_age = self._bars_age_seconds(cached) if cached else None
-            if cached and (cached_age is None or cached_age <= settings.daily_stale_seconds):
-                results[sym] = cached
-            else:
-                remaining.append(sym)
-
-        allow_alpaca_daily = _allow_alpaca_daily()
-        daily_providers = self._daily_providers(allow_alpaca_daily)
-        skip_batch = False
-        if remaining and settings.skip_daily_on_rate_limit and daily_providers:
-            if all(self._provider_rate_limited(provider) for provider in daily_providers):
-                logger.warning(
-                    "Daily providers rate-limited; skipping batch daily fetch for %s symbols",
-                    len(remaining),
-                )
-                skip_batch = True
-        if remaining and not skip_batch:
-            for provider in self.providers:
-                if hasattr(provider, "get_daily_bars_multi"):
-                    provider_name = provider.__class__.__name__
-                    if self._provider_rate_limited(provider):
-                        continue
-                    try:
-                        batch = provider.get_daily_bars_multi(remaining, limit=limit)  # type: ignore[attr-defined]
-                        for sym, bars in batch.items():
-                            age = self._bars_age_seconds(bars)
-                            if age is not None and age > settings.daily_stale_seconds:
-                                logger.warning(
-                                    "%s batch daily bars stale for %s (age %.1f days); skipping",
-                                    provider_name,
-                                    sym,
-                                    age / 86400.0,
-                                )
-                                continue
-                            merged = self._merge_records(cache.get(f"daily_bars:{sym}") or [], bars, limit)
-                            cache.set(f"daily_bars:{sym}", merged, settings.cache_ttl)
-                            results[sym] = merged
-                            self._set_last_provider(sym, "daily", provider_name)
-                    except Exception as exc:  # pragma: no cover - network guard
-                        logger.warning("%s batch daily bars failed: %s", provider_name, exc)
-                # no else; fall back to per-symbol below
-
-        for sym in symbols:
-            if sym in results:
-                continue
-            results[sym] = self.get_daily_aggregates(sym, limit=limit)
-        return results
+        return {symbol: self.get_daily_aggregates(symbol, limit) for symbol in symbols}
 
     @staticmethod
     def aggregates_to_dataframe(bars: List[Dict[str, float]]) -> pd.DataFrame:

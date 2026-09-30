@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import time
 from datetime import datetime, timezone
 
@@ -41,7 +42,7 @@ def _coerce_pct(value: object, fallback: float) -> float:
         pct = float(value)
     except (TypeError, ValueError):
         return fallback
-    if pct <= 0 or pct >= 1:
+    if not math.isfinite(pct) or pct <= 0 or pct >= 1:
         return fallback
     return pct
 
@@ -49,7 +50,7 @@ def _coerce_pct(value: object, fallback: float) -> float:
 def _coerce_minutes(value: object, fallback: int) -> int:
     try:
         minutes = int(float(value))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return fallback
     if minutes <= 0:
         return fallback
@@ -103,10 +104,10 @@ def can_open_position(
         return False
     max_positions = settings.crash_max_positions if crash_mode else MAX_POSITIONS
     max_pos_size = _max_position_notional(equity, crash_mode)
-    return current_positions < max_positions and allocation_amount <= max_pos_size
+    return math.isfinite(allocation_amount) and 0 < allocation_amount <= max_pos_size and current_positions < max_positions
 
 
-def should_exit(position: dict, crash_mode: bool = False) -> bool:
+def should_exit(position: dict, crash_mode: bool = False, *, now: float | None = None) -> bool:
     """Determine if an open position should be closed."""
     price_raw = position.get("current_price", 0.0) if isinstance(position, dict) else getattr(position, "current_price", 0.0)
     entry_raw = position.get("entry_price", 0.0) if isinstance(position, dict) else getattr(position, "entry_price", 0.0)
@@ -116,7 +117,7 @@ def should_exit(position: dict, crash_mode: bool = False) -> bool:
     price = float(price_raw)
     entry = float(entry_raw)
 
-    if not price or not entry:
+    if not math.isfinite(price) or not math.isfinite(entry) or price <= 0 or entry <= 0:
         return True
 
     default_tp = settings.crash_take_profit_pct if crash_mode else TAKE_PROFIT_PCT
@@ -143,7 +144,7 @@ def should_exit(position: dict, crash_mode: bool = False) -> bool:
         logger.warning("Invalid entry_timestamp for %s; skipping time-stop", symbol)
         return False
 
-    elapsed_minutes = (datetime.now(timezone.utc).timestamp() - entry_ts) / 60
+    elapsed_minutes = ((datetime.now(timezone.utc).timestamp() if now is None else now) - entry_ts) / 60
 
     if elapsed_minutes >= max_minutes:
         logger.info("Time-stop exit triggered for %s after %.1f minutes", symbol, elapsed_minutes)

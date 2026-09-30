@@ -1,0 +1,17 @@
+# Pinned production paper runtime; Python 3.11/3.12. No brokerage SDK, LLM or ML runtime.
+certifi==2026.7.22
+charset-normalizer==3.5.1
+exchange-calendars==4.13.2
+idna==3.19
+korean-lunar-calendar==0.4.0
+numpy==1.26.4
+pandas==2.3.3
+pyluach==2.3.0
+python-dateutil==2.9.0.post0
+python-dotenv==1.2.3
+pytz==2026.3.post1
+requests==2.34.2
+six==1.17.0
+toolz==1.1.0
+tzdata==2026.3
+urllib3==2.7.0

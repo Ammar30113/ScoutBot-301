@@ -1,248 +1,79 @@
-import logging
-import math
-import time
-from datetime import datetime, time as dt_time, timezone
+"""Paper-only worker. IBKR integration is intentionally not enabled yet."""
+from __future__ import annotations
 
-import pytz
+import argparse
+import json
+import logging
+import signal
+import threading
+import time
+
+import requests
 
 from core.config import get_settings
-from universe.universe_builder import get_universe
-from strategy.signal_router import route_signals
-from trader.allocation import allocate_positions
-from trader.execution_adapter import (
-    execute_signals,
-    close_position,
-    list_positions,
-    reconcile_pending_entries,
-    trading_client,
-)
-from trader import risk_model
+from core.io import atomic_json
+from core.logger import get_logger
 from data.price_router import PriceRouter
-from strategy.crash_detector import get_crash_state
-from trader.pnl_tracker import update_daily_pnl
-from data.portfolio_state import sync_entry_timestamps, sync_entry_metadata
-from types import SimpleNamespace
+from scripts.preflight import run_preflight
+from trader.paper_engine import PaperEngine
+from trader.paper_store import PaperStore
 
-logging.basicConfig(level=logging.INFO, format="%Y-%m-%d %H:%M:%S | %(levelname)s | %(name)s | %(message)s")
-logger = logging.getLogger(__name__)
-price_router = PriceRouter()
-context = SimpleNamespace()
-settings = get_settings()
+logger = get_logger(__name__)
 
 
-def market_open_now() -> bool:
-    est = pytz.timezone("America/New_York")
-    now = datetime.now(est)
-    if now.weekday() >= 5:
-        return False
-    if trading_client is not None:
-        try:
-            clock = trading_client.get_clock()
-            is_open = getattr(clock, "is_open", None)
-            if is_open is not None:
-                return bool(is_open)
-        except Exception as exc:  # pragma: no cover - network guard
-            logger.warning("Market clock unavailable; falling back to local time: %s", exc)
-    now_time = now.time()
-    market_open = dt_time(9, 30)
-    market_close = dt_time(16, 0)
-    return market_open <= now_time <= market_close
+def run_once(store: PaperStore, router: PriceRouter, now: float | None = None) -> dict:
+    settings = get_settings()
+    with store.locked():
+        engine = PaperEngine(settings, store.load())
+        report = engine.step(router, time.time() if now is None else now)
+        store.save(engine.snapshot(), engine.broker.events)
+        atomic_json(settings.paper_state_path.with_suffix(".status.json"), report)
+        return report
 
 
-def microcap_cycle():
-    while True:
-        start = time.time()
-        try:
-            if not market_open_now():
-                logger.info("Market closed — skipping cycle")
-                continue
-            # Compute P&L once per cycle
-            pnl_state = update_daily_pnl(trading_client)
-            pnl_penalty = 0.0
-            equity_return_pct = None
-            equity_value = None
-            trade_allowed = True
-
-            if pnl_state:
-                equity_return_pct = pnl_state.equity_return_pct
-                equity_value = pnl_state.equity
-                if pnl_state.equity_return_pct < -settings.pnl_penalty_loss_threshold:
-                    pnl_penalty = settings.pnl_penalty_loss_value
-                elif pnl_state.equity_return_pct > settings.pnl_penalty_gain_threshold:
-                    pnl_penalty = settings.pnl_penalty_gain_value
-                if risk_model.daily_loss_exceeded(pnl_state.equity_return_pct):
-                    trade_allowed = False
-                    logger.warning(
-                        "Daily loss limit reached (return %.3f <= -%.3f); blocking new entries",
-                        pnl_state.equity_return_pct,
-                        settings.max_daily_loss_pct,
-                    )
-
-            # Pass penalty into signal router
-            context.pnl_penalty = pnl_penalty
-            logger.info("P&L penalty for this cycle: %s", pnl_penalty)
-            crash, drop, data_age = get_crash_state()
-            if data_age is None:
-                logger.warning("Intraday data check failed; crash gate disabled for this cycle")
-                if settings.require_crash_data:
-                    continue
-                crash = False
-                drop = 0.0
-            elif data_age > settings.intraday_stale_seconds:
-                logger.warning(
-                    "Intraday data stale (age %.1f min > %.1f min); crash gate disabled for this cycle",
-                    data_age / 60.0,
-                    settings.intraday_stale_seconds / 60.0,
-                )
-                if settings.require_crash_data:
-                    continue
-                crash = False
-                drop = 0.0
-            context.intraday_data_age = data_age
-            context.intraday_data_fresh = data_age is not None and data_age <= settings.intraday_stale_seconds
-            logger.info("Crash mode = %s (SPY 5min drop = %.3f)", crash, drop)
-            logger.info("=== Crash Mode %s ===", "ACTIVE" if crash else "OFF")
-
-            if trade_allowed:
-                universe = get_universe()
-                if not universe:
-                    logger.info("Universe empty; skipping cycle")
-                    continue
-
-                signals = route_signals(universe, crash_mode=crash, context=context)
-                if not signals:
-                    logger.info("No signals generated; skipping allocations")
-                    continue
-                allocations = allocate_positions(signals, crash_mode=crash)
-
-                # Enforce max position caps before submitting
-                max_notional = risk_model.max_position_notional(equity_value, crash_mode=crash)
-                filtered_allocations = {}
-                open_positions = list_positions()
-                open_count = len(open_positions)
-                for symbol, shares in allocations.items():
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--once", action="store_true", help="Run one cycle and exit; nonzero if unhealthy")
+    args = parser.parse_args()
+    errors, warnings = run_preflight()
+    for warning in warnings:
+        logger.warning("Preflight: %s", warning)
+    for error in errors:
+        logger.error("Preflight: %s", error)
+    if errors:
+        return 2
+    settings = get_settings()
+    store = PaperStore(settings.paper_state_path, account=settings.paper_account_id, strategy=settings.strategy)
+    router = PriceRouter()
+    stopped = threading.Event()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        signal.signal(sig, lambda *_: stopped.set())
+    try:
+        while not stopped.is_set():
+            start = time.monotonic()
+            try:
+                report = run_once(store, router)
+                logger.info("Paper cycle: %s", json.dumps(report, allow_nan=False))
+                if report["status"] == "ok" and settings.heartbeat_url:
                     try:
-                        price = price_router.get_price(symbol)
-                    except Exception as exc:  # pragma: no cover - network guard
-                        logger.warning("Skipping %s for risk check; price unavailable: %s", symbol, exc)
-                        continue
-                    notional = shares * price
-                    if max_notional > 0 and notional > max_notional:
-                        capped_shares = math.floor(max_notional / price)
-                        if capped_shares <= 0:
-                            logger.info(
-                                "Risk cap blocked %s (notional %.2f > max %.2f)",
-                                symbol,
-                                notional,
-                                max_notional,
-                            )
-                            continue
-                        if capped_shares < shares:
-                            logger.info(
-                                "Risk cap scaled %s from %s to %s shares (notional %.2f -> %.2f, max %.2f)",
-                                symbol,
-                                shares,
-                                capped_shares,
-                                notional,
-                                capped_shares * price,
-                                max_notional,
-                            )
-                            shares = capped_shares
-                            notional = shares * price
-                    if risk_model.can_open_position(
-                        open_count + len(filtered_allocations),
-                        notional,
-                        crash_mode=crash,
-                        equity=equity_value,
-                        equity_return_pct=equity_return_pct,
-                    ):
-                        filtered_allocations[symbol] = shares
-                    else:
-                        logger.info("Risk cap blocked %s (notional %.2f)", symbol, notional)
-
-                signal_map = {
-                    sig["symbol"]: sig for sig in signals if isinstance(sig, dict) and sig.get("symbol")
-                }
-                trade_signals = []
-                for symbol, shares in filtered_allocations.items():
-                    metadata = signal_map.get(symbol, {})
-                    trade_signals.append(
-                        {
-                            "symbol": symbol,
-                            "action": "BUY",
-                            "requested_qty": shares,
-                            "reason": metadata.get("reason") or metadata.get("type"),
-                            "score": metadata.get("score"),
-                            "stop_loss_pct": metadata.get("stop_loss_pct"),
-                            "take_profit_pct": metadata.get("take_profit_pct"),
-                            "max_hold_minutes": metadata.get("max_hold_minutes"),
-                            "data_source": metadata.get("data_source"),
-                        }
-                    )
-                execute_signals(trade_signals, crash_mode=crash)
-
-            reconcile_pending_entries()
-            # Exit checks for existing positions
-            open_positions = list_positions()
-            entry_ts_map = sync_entry_timestamps(
-                [pos.symbol for pos in open_positions],
-                default_timestamp=None,
-            )
-            entry_meta_map = sync_entry_metadata([pos.symbol for pos in open_positions])
-            for pos in open_positions:
-                symbol_key = pos.symbol.upper()
-                try:
-                    current_price = float(pos.current_price)
-                    entry_price = float(pos.avg_entry_price)
-                except (TypeError, ValueError) as exc:
-                    logger.warning("Skipping %s exit check; price parse error: %s", pos.symbol, exc)
-                    continue
-                metadata = entry_meta_map.get(symbol_key, {}) if isinstance(entry_meta_map, dict) else {}
-                position_payload = {
-                    "symbol": pos.symbol,
-                    "current_price": current_price,
-                    "entry_price": entry_price,
-                    "entry_timestamp": entry_ts_map.get(symbol_key),
-                    "stop_loss_pct": metadata.get("stop_loss_pct"),
-                    "take_profit_pct": metadata.get("take_profit_pct"),
-                    "max_hold_minutes": metadata.get("max_hold_minutes"),
-                    "data_source": metadata.get("data_source"),
-                }
-                if risk_model.should_exit(position_payload, crash_mode=crash):
-                    entry_ts = entry_ts_map.get(symbol_key)
-                    exit_reason = "technical_exit"
-                    if not current_price or not entry_price:
-                        exit_reason = "invalid_price"
-                    else:
-                        gain = (current_price / entry_price) - 1 if entry_price > 0 else 0.0
-                        tp_pct = settings.crash_take_profit_pct if crash else risk_model.TAKE_PROFIT_PCT
-                        sl_pct = settings.crash_stop_loss_pct if crash else risk_model.STOP_LOSS_PCT
-                        max_minutes = settings.crash_max_hold_minutes if crash else settings.default_max_hold_minutes
-                        if gain >= tp_pct:
-                            exit_reason = "take_profit"
-                        elif gain <= -sl_pct:
-                            exit_reason = "stop_loss"
-                        elif entry_ts is not None:
-                            try:
-                                elapsed = (datetime.now(timezone.utc).timestamp() - float(entry_ts)) / 60
-                                if elapsed >= max_minutes:
-                                    exit_reason = "time_stop"
-                            except (TypeError, ValueError):
-                                exit_reason = "technical_exit"
-                    close_position(pos.symbol, reason=exit_reason)
-
-            logger.info("=== Cycle Complete ===")
-            # After finishing a cycle:
-            update_daily_pnl(trading_client)
-            logger.info("Daily P/L updated.")
-        except Exception as exc:  # pragma: no cover - defensive loop
-            logger.exception("Cycle failed: %s", exc)
-        finally:
-            elapsed = time.time() - start
-            interval = max(settings.scheduler_interval_seconds, 1)
-            sleep_for = max(interval - elapsed, 0)
-            time.sleep(sleep_for)
+                        requests.get(settings.heartbeat_url, timeout=5).raise_for_status()
+                    except requests.RequestException:
+                        logger.warning("Heartbeat delivery failed")
+                code = 0 if report["status"] == "ok" else 1
+            except Exception as exc:
+                # Provider exception messages can contain credential-bearing URLs.
+                logger.error("Paper cycle failed (%s); persisted ledger was not reset", type(exc).__name__)
+                atomic_json(settings.paper_state_path.with_suffix(".status.json"),
+                            {"timestamp": time.time(), "status": "error", "error": type(exc).__name__})
+                code = 1
+            if args.once:
+                return code
+            stopped.wait(max(settings.scheduler_interval_seconds - (time.monotonic() - start), 1))
+    finally:
+        store.close()
+    return 0
 
 
 if __name__ == "__main__":
-    microcap_cycle()
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    raise SystemExit(main())

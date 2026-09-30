@@ -188,7 +188,7 @@ class TwelveDataProvider:
             return cached
 
     def get_aggregates(self, symbol: str, timespan: str = "1day", limit: int = 60) -> List[Dict[str, float]]:
-        cache_key = f"td:{timespan}:{symbol.upper()}"
+        cache_key = f"td:{timespan}:{symbol.upper()}:{limit}"
         cached = self.cache.get(cache_key) or []
         if cached is _NO_DATA:
             return []
@@ -202,6 +202,8 @@ class TwelveDataProvider:
             "interval": interval,
             "apikey": self.api_key,
             "outputsize": limit,
+            "timezone": "America/New_York",
+            "adjust": "splits",
         }
         try:
             response = requests.get(f"{self.BASE_URL}/time_series", params=params, timeout=10)
@@ -212,6 +214,9 @@ class TwelveDataProvider:
             payload = response.json() or {}
             if self._handle_payload_error(symbol, cache_key, "aggregates", payload):
                 return cached
+            meta = payload.get("meta", {})
+            if meta.get("currency") not in (None, "USD"):
+                raise ValueError("Paper daily data must be denominated in USD")
             values = payload.get("values", []) or []
             if not values:
                 _warn_sample("aggregates_empty", f"TwelveData aggregates empty for {symbol}", level=logging.INFO)
@@ -255,6 +260,8 @@ class TwelveDataProvider:
             "interval": "1min",
             "apikey": self.api_key,
             "outputsize": limit,
+            "timezone": "America/New_York",
+            "adjust": "splits",
         }
         try:
             response = requests.get(f"{self.BASE_URL}/time_series", params=params, timeout=10)
@@ -265,6 +272,9 @@ class TwelveDataProvider:
             payload = response.json() or {}
             if self._handle_payload_error(symbol, cache_key, "intraday", payload):
                 return cached
+            meta = payload.get("meta", {})
+            if meta.get("currency") not in (None, "USD"):
+                raise ValueError("Paper daily data must be denominated in USD")
             values = payload.get("values", []) or []
             if not values:
                 _warn_sample("intraday_empty", f"TwelveData intraday aggregates empty for {symbol}", level=logging.INFO)

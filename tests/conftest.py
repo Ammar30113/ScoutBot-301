@@ -1,14 +1,10 @@
-"""Shared test fixtures and import shims."""
+"""Tests use explicit provider fixtures and must never call external services."""
+import pytest
 
-import sys
-from unittest.mock import MagicMock
 
-# If the 'ta' library is not installed (e.g., in CI without native deps),
-# provide a mock so tests that don't directly use it can still run.
-try:
-    import ta  # noqa: F401
-except ImportError:
-    ta_mock = MagicMock()
-    sys.modules["ta"] = ta_mock
-    sys.modules["ta.momentum"] = ta_mock.momentum
-    sys.modules["ta.trend"] = ta_mock.trend
+@pytest.fixture(autouse=True)
+def no_network(monkeypatch):
+    def denied(*args, **kwargs):
+        raise AssertionError("Unexpected network access in offline test")
+    monkeypatch.setattr("requests.sessions.Session.request", denied)
+    monkeypatch.setattr("httpx.Client.send", denied)

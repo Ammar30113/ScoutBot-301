@@ -1,4 +1,6 @@
+"""Legacy account analytics only; not used by the isolated paper worker."""
 import logging
+import math
 from datetime import datetime, timezone
 
 from data.portfolio_state import load_state, save_state
@@ -6,7 +8,7 @@ from data.portfolio_state import load_state, save_state
 logger = logging.getLogger(__name__)
 
 
-def update_daily_pnl(alpaca_client):
+def update_daily_pnl(alpaca_client, *, realized_pnl: float | None = None):
     state = load_state()
 
     if alpaca_client is None:
@@ -20,12 +22,9 @@ def update_daily_pnl(alpaca_client):
 
     equity = float(account.equity)
     unrealized = sum(float(p.unrealized_pl) for p in positions)
-    realized_raw = getattr(account, "realized_pl", 0.0)
-    try:
-        realized = float(realized_raw)
-    except (TypeError, ValueError) as exc:
-        logger.warning("Failed to parse realized P&L (%r): %s", realized_raw, exc)
-        realized = 0.0
+    if realized_pnl is None or not math.isfinite(realized_pnl):
+        raise ValueError("Realized P&L must be supplied from a reconciled fill ledger")
+    realized = float(realized_pnl)
 
     today = datetime.now(timezone.utc).date().isoformat()
     if state.day_start_date != today or state.day_start_equity <= 0:

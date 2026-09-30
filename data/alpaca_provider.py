@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 from collections import defaultdict
 import time
@@ -96,7 +96,10 @@ class AlpacaProvider:
             return []
         timeframe = self._normalize_timespan(timespan)
         url = f"{self.base_url}/stocks/{symbol.upper()}/bars"
-        params = {"timeframe": timeframe, "limit": limit, "adjustment": "split"}
+        now = datetime.now(timezone.utc)
+        lookback = timedelta(days=max(limit * 2, 30)) if timeframe == "1Day" else timedelta(days=max(7, limit // 390 + 2))
+        params = {"timeframe": timeframe, "limit": min(limit, 10000), "adjustment": "split",
+                  "start": (now - lookback).isoformat(), "end": now.isoformat(), "sort": "desc"}
         if self.data_feed:
             params["feed"] = self.data_feed
         try:
@@ -106,7 +109,7 @@ class AlpacaProvider:
                 return []
             response.raise_for_status()
             data = response.json().get("bars", []) or []
-            return [self._normalize_bar(item) for item in data]
+            return sorted([self._normalize_bar(item) for item in data], key=lambda bar: bar["timestamp"])
         except Exception as exc:  # pragma: no cover - network guard
             _warn_sample("aggregates_failed", f"Alpaca aggregates failed for {symbol}: {exc}")
             return []

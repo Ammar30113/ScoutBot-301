@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import math
 import logging
 from dataclasses import dataclass, field
 from functools import lru_cache
@@ -81,7 +82,10 @@ def _get_float(name: str, default: float) -> float:
         return float(default)
     normalized = raw.replace("_", "")
     try:
-        return float(normalized)
+        value = float(normalized)
+        if not math.isfinite(value):
+            raise ValueError("non-finite")
+        return value
     except ValueError:
         logger.warning("Invalid float for %s=%r; using default %s", name, raw, default)
         return float(default)
@@ -97,7 +101,7 @@ def _get_csv(name: str, default: list[str]) -> list[str]:
 
 
 # Core sentiment/env toggles exposed for direct imports
-USE_SENTIMENT = _get_bool("USE_SENTIMENT", True)
+USE_SENTIMENT = _get_bool("USE_SENTIMENT", False)
 USE_TWITTER_NEWS = _get_bool("USE_TWITTER_NEWS", False)
 OPENAI_MODEL = _normalize_env_value(os.getenv("OPENAI_MODEL")) or "gpt-3.5-turbo-16k"
 SENTIMENT_CACHE_TTL = _get_int("SENTIMENT_CACHE_TTL", 300)
@@ -118,7 +122,7 @@ class Settings:
     alpaca_data_feed: str = field(default_factory=lambda: _get_str("ALPACA_DATA_FEED", "iex"))
     trading_mode: str = field(default_factory=lambda: _get_str("MODE", "paper").lower())
     allow_live_trading: bool = field(default_factory=lambda: _get_bool("ALLOW_LIVE_TRADING", False))
-    dry_run: bool = field(default_factory=lambda: _get_bool("DRY_RUN", False))
+    dry_run: bool = field(default_factory=lambda: _get_bool("DRY_RUN", True))
     allow_alpaca_daily: bool | None = field(default_factory=lambda: _get_optional_bool("ALLOW_ALPACA_DAILY"))
     strip_rate_limited_keys: bool = field(default_factory=lambda: _get_bool("STRIP_RATE_LIMITED_KEYS", False))
     skip_daily_on_rate_limit: bool = field(default_factory=lambda: _get_bool("SKIP_DAILY_ON_RATE_LIMIT", True))
@@ -134,12 +138,12 @@ class Settings:
         or _get_str("ALPHA_VANTAGE_KEY", "")
     )
     marketstack_api_key: str = field(default_factory=lambda: _get_str("MARKETSTACK_API_KEY", ""))
-    marketstack_cache_ttl: int = field(default_factory=lambda: _get_int("MARKETSTACK_CACHE_TTL", 86400))
+    marketstack_cache_ttl: int = field(default_factory=lambda: _get_int("MARKETSTACK_CACHE_TTL", 900))
     openai_api_key: str = field(default_factory=lambda: _get_str("OPENAI_API_KEY", ""))
-    openai_model: str = field(default_factory=lambda: OPENAI_MODEL)
-    use_sentiment: bool = field(default_factory=lambda: USE_SENTIMENT)
-    sentiment_cache_ttl: int = field(default_factory=lambda: SENTIMENT_CACHE_TTL)
-    use_twitter_news: bool = field(default_factory=lambda: USE_TWITTER_NEWS)
+    openai_model: str = field(default_factory=lambda: _get_str("OPENAI_MODEL", OPENAI_MODEL))
+    use_sentiment: bool = field(default_factory=lambda: _get_bool("USE_SENTIMENT", False))
+    sentiment_cache_ttl: int = field(default_factory=lambda: _get_int("SENTIMENT_CACHE_TTL", SENTIMENT_CACHE_TTL))
+    use_twitter_news: bool = field(default_factory=lambda: _get_bool("USE_TWITTER_NEWS", False))
     twitter_bearer_token: str = field(default_factory=lambda: _get_str("TWITTER_BEARER_TOKEN", ""))
     allow_synthetic_ml: bool = field(default_factory=lambda: _get_bool("ALLOW_SYNTHETIC_ML", False))
     allow_fallback_ml: bool = field(default_factory=lambda: _get_bool("ALLOW_FALLBACK_ML", False))
@@ -155,7 +159,7 @@ class Settings:
     )
     universe_fallback_only: bool = field(default_factory=lambda: _get_bool("UNIVERSE_FALLBACK_ONLY", False))
     universe_allow_unfiltered_fallback: bool = field(
-        default_factory=lambda: _get_bool("UNIVERSE_ALLOW_UNFILTERED_FALLBACK", True)
+        default_factory=lambda: _get_bool("UNIVERSE_ALLOW_UNFILTERED_FALLBACK", False)
     )
     min_dollar_volume: float = field(default_factory=lambda: _get_float("MIN_DOLLAR_VOLUME", 8_000_000.0))
     min_mkt_cap: float = field(default_factory=lambda: _get_float("MIN_MKT_CAP", 300_000_000.0))
@@ -165,8 +169,8 @@ class Settings:
     max_universe_size: int = field(default_factory=lambda: _get_int("MAX_UNIVERSE_SIZE", 50))
     universe_candidate_limit: int = field(default_factory=lambda: _get_int("UNIVERSE_CANDIDATE_LIMIT", 0))
     universe_liquidity_top_n: int = field(default_factory=lambda: _get_int("UNIVERSE_LIQUIDITY_TOP_N", 300))
-    cache_ttl: int = field(default_factory=lambda: _get_int("CACHE_TTL", 900))
-    intraday_stale_seconds: int = field(default_factory=lambda: _get_int("INTRADAY_STALE_SECONDS", 900))
+    cache_ttl: int = field(default_factory=lambda: _get_int("CACHE_TTL", 60))
+    intraday_stale_seconds: int = field(default_factory=lambda: _get_int("INTRADAY_STALE_SECONDS", 600))
     daily_stale_seconds: int = field(default_factory=lambda: _get_int("DAILY_STALE_SECONDS", 432000))
     min_volume_history_days: int = field(default_factory=lambda: _get_int("MIN_VOLUME_HISTORY_DAYS", 3))
     allow_partial_fundamentals: bool = field(
@@ -191,7 +195,7 @@ class Settings:
     default_timespan: str = field(default_factory=lambda: _get_str("DEFAULT_TIMESPAN", "1day"))
     ml_trend_threshold: float = field(default_factory=lambda: _get_float("ML_TREND_THRESHOLD", 0.20))
     ml_reversal_threshold: float = field(default_factory=lambda: _get_float("ML_REVERSAL_THRESHOLD", 0.26))
-    ml_heuristic_weight: float = field(default_factory=lambda: _get_float("ML_HEURISTIC_WEIGHT", 0.8))
+    ml_heuristic_weight: float = field(default_factory=lambda: _get_float("ML_HEURISTIC_WEIGHT", 0.0))
 
     # P&L penalty thresholds (previously hardcoded in main.py)
     pnl_penalty_loss_threshold: float = field(default_factory=lambda: _get_float("PNL_PENALTY_LOSS_THRESHOLD", 0.01))
@@ -208,6 +212,23 @@ class Settings:
 
     # Cache limits
     cache_max_size: int = field(default_factory=lambda: _get_int("CACHE_MAX_SIZE", 5000))
+
+    broker: str = field(default_factory=lambda: _get_str("BROKER", "simulated"))
+    strategy: str = field(default_factory=lambda: _get_str("STRATEGY", "daily_trend"))
+    paper_account_id: str = field(default_factory=lambda: _get_str("PAPER_ACCOUNT_ID", "scout-paper-usd"))
+    paper_state_path: Path = field(default_factory=lambda: Path(_get_str("PAPER_STATE_PATH", "data/paper.sqlite3")))
+    paper_initial_cash: float = field(default_factory=lambda: _get_float("PAPER_INITIAL_CASH_USD", 1000.0))
+    paper_symbols: list[str] = field(default_factory=lambda: _get_csv("PAPER_SYMBOLS", ["SPY", "QQQ", "IWM"]))
+    paper_data_provider: str = field(default_factory=lambda: _get_str("PAPER_DATA_PROVIDER", "auto"))
+    paper_slippage_bps: float = field(default_factory=lambda: _get_float("PAPER_SLIPPAGE_BPS", 10.0))
+    paper_fee_bps: float = field(default_factory=lambda: _get_float("PAPER_FEE_BPS", 5.0))
+    paper_min_fee: float = field(default_factory=lambda: _get_float("PAPER_MIN_FEE_USD", 0.35))
+    max_gross_exposure_pct: float = field(default_factory=lambda: _get_float("MAX_GROSS_EXPOSURE_PCT", 0.5))
+    max_portfolio_risk_pct: float = field(default_factory=lambda: _get_float("MAX_PORTFOLIO_RISK_PCT", 0.01))
+    max_drawdown_pct: float = field(default_factory=lambda: _get_float("MAX_DRAWDOWN_PCT", 0.05))
+    trend_days: int = field(default_factory=lambda: _get_int("TREND_DAYS", 200))
+    data_delay_seconds: int = field(default_factory=lambda: _get_int("DATA_DELAY_SECONDS", 900))
+    heartbeat_url: str = field(default_factory=lambda: _get_str("HEARTBEAT_URL", ""))
 
     def __post_init__(self) -> None:
         if self.max_position_size <= 0:

@@ -17,8 +17,8 @@ def test_preflight_rejects_unsafe_trading_env(monkeypatch):
 
     errors, _warnings = run_preflight()
 
-    assert "ALLOW_FALLBACK_ML=true permits heuristic ML fallback when no real model is available." in errors
-    assert "UNIVERSE_FALLBACK_ONLY=true bypasses liquidity/fundamental filters and is not suitable for trading." in errors
+    assert any(e.startswith("ALLOW_FALLBACK_ML must be false") for e in errors)
+    assert any(e.startswith("UNIVERSE_FALLBACK_ONLY must be false") for e in errors)
     assert "MAX_UNIVERSE_SIZE must be a single integer, not '8-12'." in errors
 
     _reset_settings()

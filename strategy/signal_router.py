@@ -12,7 +12,6 @@ from strategy.technicals import passes_entry_filter, compute_atr
 from strategy.ml_classifier import generate_predictions
 from strategy.reversal import compute_reversal_signal
 from strategy.sentiment_engine import get_symbol_sentiment
-from strategy.swing import generate_swing_signals
 from strategy.orb import find_orb_setups
 from trader.risk_model import STOP_LOSS_PCT, TAKE_PROFIT_PCT
 from trader.trade_logger import log_trade
@@ -89,12 +88,7 @@ def route_signals(universe: List[str], crash_mode: bool = False, context=None) -
             )
         else:
             logger.warning("Intraday data unavailable; switching to swing fallback")
-        daily_bars_map = _load_daily_bars(universe)
-        sentiment_lookup = get_symbol_sentiment if settings.use_sentiment else None
-        swing_signals = generate_swing_signals(universe, daily_bars_map, sentiment_lookup=sentiment_lookup)
-        for sig in swing_signals:
-            _log_signal(sig)
-        return swing_signals
+        return []  # A data outage must not select another strategy.
 
     orb_signals = find_orb_setups(universe, crash_mode=crash_mode)
     skip_symbols = {sig["symbol"] for sig in orb_signals}
@@ -227,7 +221,7 @@ def route_signals(universe: List[str], crash_mode: bool = False, context=None) -
             -0.10 <= momentum_score <= 0.10
             and volatility_ratio > 1.05
             and prob >= reverse_prob_cutoff
-            and reversal_score != 0.0
+            and reversal_score > 0.0
         )
         reversal_allowed = reversal_allowed and (regime_score >= -0.35 or crash_mode)
 
@@ -260,7 +254,7 @@ def route_signals(universe: List[str], crash_mode: bool = False, context=None) -
             max_possible = raw_score_base + 0.15
             if max_possible > score_threshold:
                 sentiment_raw = float(get_symbol_sentiment(symbol) or 0.0)
-                sentiment = (sentiment_raw + 1.0) / 2.0  # map [-1,1] to [0,1]
+                sentiment = max(-1.0, min(sentiment_raw, 1.0))  # Neutral evidence stays neutral.
         raw_score = raw_score_base + 0.15 * sentiment
 
         # P&L penalty/boost injected from main
@@ -386,9 +380,4 @@ def route_signals(universe: List[str], crash_mode: bool = False, context=None) -
     if signals:
         return signals
 
-    daily_bars_map = daily_bars_map or _load_daily_bars(universe)
-    sentiment_lookup = get_symbol_sentiment if settings.use_sentiment else None
-    swing_signals = generate_swing_signals(universe, daily_bars_map, sentiment_lookup=sentiment_lookup)
-    for sig in swing_signals:
-        _log_signal(sig)
-    return swing_signals
+    return []
